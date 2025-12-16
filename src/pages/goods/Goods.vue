@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed, ref } from 'vue'
+import { computed, onMounted, ref, watch } from 'vue'
 import { ElMessage } from 'element-plus'
 import dayjs from 'dayjs'
 import { storeToRefs } from 'pinia'
@@ -9,24 +9,52 @@ const goodsStore = useGoodsStore()
 const { goods, selectedGoodsId, selectedGoods, loading } = storeToRefs(goodsStore)
 
 const keyword = ref('')
+const page = ref(1)
+const pageSize = ref(20)
 
 const filteredGoods = computed(() => {
   const kw = keyword.value.trim().toLowerCase()
   if (!kw) return goods.value
-  return goods.value.filter((g) => g.title.toLowerCase().includes(kw))
+  return goods.value.filter((g) => {
+    const titleHit = (g.title ?? '').toLowerCase().includes(kw)
+    const pathHit = (g.path ?? '').toLowerCase().includes(kw)
+    return titleHit || pathHit
+  })
 })
 
-function formatRange(start?: string, end?: string) {
-  if (!start && !end) return '-'
-  const s = start ? dayjs(start).format('MM-DD HH:mm') : '-'
-  const e = end ? dayjs(end).format('MM-DD HH:mm') : '-'
-  return `${s} ~ ${e}`
+const total = computed(() => filteredGoods.value.length)
+
+const pageGoods = computed(() => {
+  const start = (page.value - 1) * pageSize.value
+  const end = start + pageSize.value
+  return filteredGoods.value.slice(start, end)
+})
+
+function formatTime(value?: string) {
+  if (!value) return '-'
+  return dayjs(value).format('YYYY-MM-DD HH:mm:ss')
 }
 
 function setTarget(id: string) {
   goodsStore.setSelectedGoods(id)
   ElMessage.success('已设为目标商品')
 }
+
+async function refresh() {
+  try {
+    await goodsStore.refresh('m.4008117117.com')
+  } catch (e) {
+    ElMessage.error(e instanceof Error ? e.message : '获取商品列表失败')
+  }
+}
+
+onMounted(() => {
+  void refresh()
+})
+
+watch(keyword, () => {
+  page.value = 1
+})
 </script>
 
 <template>
@@ -37,29 +65,29 @@ function setTarget(id: string) {
           <template #header>
             <div class="toolbar">
               <el-space :size="8">
-                <el-input v-model="keyword" placeholder="搜索商品名称" style="width: 260px" clearable />
-                <el-button :loading="loading" @click="goodsStore.refreshMock">刷新列表（mock）</el-button>
+                <el-input v-model="keyword" placeholder="搜索名称或路径" style="width: 260px" clearable />
+                <el-button :loading="loading" @click="refresh">刷新</el-button>
               </el-space>
-              <div style="color: #909399">后续将按目标站点 API 返回的商品列表替换这里的 mock 数据。</div>
+              <div style="color: #909399">共 {{ total }} 条</div>
             </div>
           </template>
 
-          <el-table :data="filteredGoods" row-key="id" style="width: 100%">
-            <el-table-column prop="title" label="商品名称" min-width="240" show-overflow-tooltip />
-            <el-table-column label="价格" width="90">
-              <template #default="{ row }">￥{{ row.price }}</template>
-            </el-table-column>
-            <el-table-column prop="stock" label="库存" width="70" />
-            <el-table-column label="活动时间" min-width="180">
-              <template #default="{ row }">{{ formatRange(row.startAt, row.endAt) }}</template>
-            </el-table-column>
-            <el-table-column label="标签" min-width="140">
+          <el-table :data="pageGoods" row-key="id" style="width: 100%">
+            <el-table-column prop="id" label="ID" width="90" />
+            <el-table-column prop="title" label="名称" min-width="240" show-overflow-tooltip />
+            <el-table-column prop="path" label="路径" min-width="260" show-overflow-tooltip />
+            <el-table-column prop="pageCategoryId" label="分类ID" width="90" />
+            <el-table-column label="类型" width="110">
               <template #default="{ row }">
-                <el-space :size="6" wrap>
-                  <el-tag v-for="t in row.tags ?? []" :key="t" size="small" effect="light">{{ t }}</el-tag>
-                  <span v-if="(row.tags ?? []).length === 0" style="color: #909399">-</span>
-                </el-space>
+                <el-tag v-if="row.pageType" size="small" effect="light">{{ row.pageType }}</el-tag>
+                <span v-else style="color: #909399">-</span>
               </template>
+            </el-table-column>
+            <el-table-column label="更新时间" width="170">
+              <template #default="{ row }">{{ formatTime(row.updatedAt) }}</template>
+            </el-table-column>
+            <el-table-column label="创建时间" width="170">
+              <template #default="{ row }">{{ formatTime(row.createdAt) }}</template>
             </el-table-column>
             <el-table-column label="目标" width="70">
               <template #default="{ row }">
@@ -75,6 +103,17 @@ function setTarget(id: string) {
               </template>
             </el-table-column>
           </el-table>
+
+          <div style="display: flex; justify-content: flex-end; margin-top: 12px">
+            <el-pagination
+              v-model:current-page="page"
+              v-model:page-size="pageSize"
+              :total="total"
+              :page-sizes="[10, 20, 50, 100]"
+              layout="total, sizes, prev, pager, next, jumper"
+              background
+            />
+          </div>
         </el-card>
       </el-col>
 
@@ -82,20 +121,14 @@ function setTarget(id: string) {
         <el-card shadow="never" header="目标商品">
           <div v-if="!selectedGoods" style="color: #909399">尚未选择目标商品</div>
           <el-descriptions v-else :column="1" size="small" border>
+            <el-descriptions-item label="ID">{{ selectedGoods.id }}</el-descriptions-item>
             <el-descriptions-item label="名称">{{ selectedGoods.title }}</el-descriptions-item>
-            <el-descriptions-item label="价格">￥{{ selectedGoods.price }}</el-descriptions-item>
-            <el-descriptions-item label="库存">{{ selectedGoods.stock }}</el-descriptions-item>
-            <el-descriptions-item label="活动">{{ formatRange(selectedGoods.startAt, selectedGoods.endAt) }}</el-descriptions-item>
-            <el-descriptions-item label="标签">
-              <el-space :size="6" wrap>
-                <el-tag v-for="t in selectedGoods.tags ?? []" :key="t" size="small" effect="light">{{ t }}</el-tag>
-                <span v-if="(selectedGoods.tags ?? []).length === 0" style="color: #909399">-</span>
-              </el-space>
-            </el-descriptions-item>
+            <el-descriptions-item label="路径">{{ selectedGoods.path || '-' }}</el-descriptions-item>
+            <el-descriptions-item label="分类ID">{{ selectedGoods.pageCategoryId ?? '-' }}</el-descriptions-item>
+            <el-descriptions-item label="类型">{{ selectedGoods.pageType || '-' }}</el-descriptions-item>
+            <el-descriptions-item label="更新时间">{{ formatTime(selectedGoods.updatedAt) }}</el-descriptions-item>
+            <el-descriptions-item label="创建时间">{{ formatTime(selectedGoods.createdAt) }}</el-descriptions-item>
           </el-descriptions>
-          <div style="margin-top: 10px; color: #909399">
-            创建抢购任务时，可直接使用这里的目标商品。
-          </div>
         </el-card>
       </el-col>
     </el-row>

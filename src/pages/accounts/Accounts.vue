@@ -2,16 +2,14 @@
 import { computed, reactive, ref } from 'vue'
 import type { FormInstance, FormRules } from 'element-plus'
 import { ElMessage, ElMessageBox } from 'element-plus'
-import dayjs from 'dayjs'
 import { storeToRefs } from 'pinia'
+import { Delete, Key, SwitchButton } from '@element-plus/icons-vue'
 import StatusTag from '@/components/StatusTag.vue'
 import { useAccountsStore } from '@/stores/accounts'
 import { apiGetCaptcha, apiSendSmsCode } from '@/services/api'
 
 const accountsStore = useAccountsStore()
 const { accounts } = storeToRefs(accountsStore)
-
-const selectionIds = ref<string[]>([])
 
 const addDialogVisible = ref(false)
 const addFormRef = ref<FormInstance>()
@@ -38,20 +36,6 @@ const addSmsSending = ref(false)
 const addSubmitting = ref(false)
 let addSmsTimer: number | undefined
 
-const dialogVisible = ref(false)
-const editingId = ref<string | null>(null)
-const formRef = ref<FormInstance>()
-const formModel = reactive({
-  nickname: '',
-  username: '',
-  remark: '',
-})
-
-const rules: FormRules = {
-  nickname: [{ required: true, message: '请输入昵称', trigger: 'blur' }],
-  username: [{ required: true, message: '请输入手机号', trigger: 'blur' }],
-}
-
 const loginDialogVisible = ref(false)
 const loginAccountId = ref<string | null>(null)
 const loginForm = reactive({
@@ -71,11 +55,6 @@ const loginAccount = computed(() => {
   if (!loginAccountId.value) return null
   return accounts.value.find((a) => a.id === loginAccountId.value) ?? null
 })
-
-function formatTime(value?: string) {
-  if (!value) return '-'
-  return dayjs(value).format('YYYY-MM-DD HH:mm:ss')
-}
 
 function stopAddSmsTimer() {
   if (addSmsTimer) window.clearInterval(addSmsTimer)
@@ -198,56 +177,12 @@ async function submitAdd() {
   }
 }
 
-function openEdit(id: string) {
-  const target = accounts.value.find((a) => a.id === id)
-  if (!target) return
-  editingId.value = id
-  formModel.nickname = target.nickname
-  formModel.username = target.username
-  formModel.remark = target.remark ?? ''
-  dialogVisible.value = true
-}
-
-async function submitEdit() {
-  const ok = await formRef.value?.validate().catch(() => false)
-  if (!ok) return
-  if (!editingId.value) return
-
-  accountsStore.updateAccount(editingId.value, {
-    nickname: formModel.nickname,
-    username: formModel.username,
-    remark: formModel.remark,
-  })
-  ElMessage.success('已更新账号')
-  dialogVisible.value = false
-}
-
 async function removeAccount(id: string) {
   const target = accounts.value.find((a) => a.id === id)
   if (!target) return
-  await ElMessageBox.confirm(`确认删除账号「${target.nickname}」？`, '提示', { type: 'warning' }).catch(() => null)
+  await ElMessageBox.confirm(`确认删除账号「${target.username}」？`, '提示', { type: 'warning' }).catch(() => null)
   accountsStore.removeAccount(id)
   ElMessage.success('已删除')
-}
-
-function onSelectionChange(rows: Array<{ id: string }>) {
-  selectionIds.value = rows.map((r) => r.id)
-}
-
-function batchStart() {
-  if (selectionIds.value.length === 0) {
-    ElMessage.warning('请先选择账号')
-    return
-  }
-  for (const id of selectionIds.value) accountsStore.start(id)
-}
-
-function batchStop() {
-  if (selectionIds.value.length === 0) {
-    ElMessage.warning('请先选择账号')
-    return
-  }
-  for (const id of selectionIds.value) accountsStore.stop(id)
 }
 
 function stopSmsTimer() {
@@ -354,37 +289,52 @@ async function confirmLogin() {
           <div class="left">
             <el-space :size="8">
               <el-button type="primary" @click="openAdd">新增账号</el-button>
-              <el-button type="success" @click="batchStart">批量启动</el-button>
-              <el-button type="warning" @click="batchStop">批量停止</el-button>
             </el-space>
           </div>
         </div>
       </template>
 
-      <el-table :data="accounts" row-key="id" @selection-change="onSelectionChange">
-        <el-table-column type="selection" width="44" />
-        <el-table-column prop="nickname" label="昵称" min-width="140" />
-        <el-table-column prop="username" label="手机号" min-width="160" />
+      <el-table :data="accounts" row-key="id">
+        <el-table-column label="用户id" min-width="160" show-overflow-tooltip>
+          <template #default="{ row }">{{ row.profile?.username ?? '-' }}</template>
+        </el-table-column>
+        <el-table-column prop="username" label="手机号" min-width="140" />
+        <el-table-column label="令牌" min-width="260" show-overflow-tooltip>
+          <template #default="{ row }">
+            <span v-if="row.token">{{ row.token }}</span>
+            <span v-else style="color: #c0c4cc">-</span>
+          </template>
+        </el-table-column>
         <el-table-column label="状态" width="110">
           <template #default="{ row }">
             <StatusTag kind="account" :status="row.status" />
           </template>
         </el-table-column>
-        <el-table-column label="最近心跳" min-width="170">
-          <template #default="{ row }">{{ formatTime(row.lastActiveAt) }}</template>
-        </el-table-column>
-        <el-table-column prop="remark" label="备注" min-width="160" show-overflow-tooltip />
         <el-table-column label="操作" width="320">
           <template #default="{ row }">
             <el-space :size="8" wrap>
-              <el-button size="small" @click="openLogin(row.id)" :disabled="row.status === 'logging_in'">
-                登录
-              </el-button>
-              <el-button size="small" @click="accountsStore.logout(row.id)">退出</el-button>
-              <el-button size="small" type="success" @click="accountsStore.start(row.id)">启动</el-button>
-              <el-button size="small" type="warning" @click="accountsStore.stop(row.id)">停止</el-button>
-              <el-button size="small" @click="openEdit(row.id)">编辑</el-button>
-              <el-button size="small" type="danger" @click="removeAccount(row.id)">删除</el-button>
+              <el-tooltip content="短信登录" placement="top">
+                <el-button
+                  circle
+                  size="small"
+                  type="primary"
+                  :icon="Key"
+                  @click="openLogin(row.id)"
+                  :disabled="row.status === 'logging_in'"
+                />
+              </el-tooltip>
+              <el-tooltip content="退出登录" placement="top">
+                <el-button
+                  circle
+                  size="small"
+                  :icon="SwitchButton"
+                  @click="accountsStore.logout(row.id)"
+                  :disabled="!row.token"
+                />
+              </el-tooltip>
+              <el-tooltip content="删除账号" placement="top">
+                <el-button circle size="small" type="danger" :icon="Delete" @click="removeAccount(row.id)" />
+              </el-tooltip>
             </el-space>
           </template>
         </el-table-column>
@@ -437,26 +387,6 @@ async function confirmLogin() {
         <el-space :size="8">
           <el-button @click="closeAdd">取消</el-button>
           <el-button type="primary" :loading="addSubmitting" @click="submitAdd">保存</el-button>
-        </el-space>
-      </template>
-    </el-dialog>
-
-    <el-dialog v-model="dialogVisible" title="编辑账号" width="520px" destroy-on-close>
-      <el-form ref="formRef" :model="formModel" :rules="rules" label-width="110px">
-        <el-form-item label="昵称" prop="nickname">
-          <el-input v-model="formModel.nickname" placeholder="例如：主号/副号" />
-        </el-form-item>
-        <el-form-item label="手机号" prop="username">
-          <el-input v-model="formModel.username" placeholder="用于登录的手机号" />
-        </el-form-item>
-        <el-form-item label="备注" prop="remark">
-          <el-input v-model="formModel.remark" type="textarea" :rows="2" placeholder="可选" />
-        </el-form-item>
-      </el-form>
-      <template #footer>
-        <el-space :size="8">
-          <el-button @click="dialogVisible = false">取消</el-button>
-          <el-button type="primary" @click="submitEdit">保存</el-button>
         </el-space>
       </template>
     </el-dialog>

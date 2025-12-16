@@ -7,6 +7,7 @@ export interface Account {
   password?: string
   token?: string
   auth?: unknown
+  profile?: CurrentUser
   deviceId?: string
   uuid?: string
   status: AccountStatus
@@ -14,14 +15,44 @@ export interface Account {
   remark?: string
 }
 
+export interface CurrentUser {
+  id: number
+  tenantId: number | null
+  username: string | null
+  nickname: string | null
+  avatar: string | null
+  mobile: string | null
+  email: string | null
+  enabled: boolean
+  locked: boolean
+  extra?: {
+    token?: string
+    [key: string]: unknown
+  } | null
+  createdAt?: number
+  updatedAt?: number
+  lastLoginAt?: number
+  firstLogin?: boolean
+  shopId?: number | null
+  [key: string]: unknown
+}
+
 export interface GoodsItem {
   id: string
   title: string
-  price: number
-  stock: number
+  price?: number
+  stock?: number
   startAt?: string
   endAt?: string
   tags?: string[]
+  path?: string
+  pageCategoryId?: number
+  siteId?: number
+  isIndex?: boolean
+  pageType?: string
+  createdAt?: string
+  updatedAt?: string
+  raw?: unknown
 }
 
 export type TaskStatus = 'idle' | 'scheduled' | 'running' | 'success' | 'failed' | 'stopped'

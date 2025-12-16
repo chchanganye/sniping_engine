@@ -1,5 +1,6 @@
 import axios from 'axios'
 import { http } from '@/services/http'
+import type { CurrentUser } from '@/types/core'
 
 export const FIXED_DEVICE_ID = '9b1be8c5f55fbf03a36ba7cfc6db4e54'
 
@@ -45,6 +46,38 @@ export async function apiSendSmsCode(params: SendSmsCodeParams): Promise<boolean
   }
 }
 
+export interface DesignPageItem {
+  id: number
+  name: string
+  pageCategoryId?: number
+  siteId?: number
+  path?: string
+  title?: string
+  keywords?: string
+  description?: string
+  isIndex?: boolean
+  pageType?: string
+  createdAt?: string
+  updatedAt?: string
+  deletedAt?: string | null
+  [key: string]: unknown
+}
+
+export async function apiFetchDesignPages(host = 'm.4008117117.com'): Promise<DesignPageItem[]> {
+  try {
+    const resp = await http.get<unknown>('/api/design/page/list', { params: { host } })
+    const data: any = resp.data
+
+    if (Array.isArray(data)) return data as DesignPageItem[]
+    if (data?.success === true && Array.isArray(data?.data)) return data.data as DesignPageItem[]
+    if (data?.error) throw new Error(String(data.error))
+
+    throw new Error('商品列表返回结构不符合预期')
+  } catch (e) {
+    throw new Error(extractApiErrorMessage(e, '获取商品列表失败'))
+  }
+}
+
 export interface LoginBySmsCodeParams {
   mobile: string
   smsCode: string
@@ -81,6 +114,24 @@ export async function apiLoginBySmsCode(params: LoginBySmsCodeParams): Promise<L
   }
 }
 
+export async function apiGetCurrentUser(token: string): Promise<CurrentUser> {
+  if (!token) throw new Error('缺少 token')
+  try {
+    const resp = await http.get<ApiEnvelope<CurrentUser>>('/api/user/web/current-user', {
+      headers: {
+        Authorization: `Bearer ${token}`,
+        token,
+        'x-token': token,
+      },
+    })
+    if ((resp.data as any)?.error) throw new Error(String((resp.data as any).error))
+    if (!resp.data?.success) throw new Error(resp.data?.message || '获取用户信息失败')
+    return resp.data.data
+  } catch (e) {
+    throw new Error(extractApiErrorMessage(e, '获取用户信息失败'))
+  }
+}
+
 export interface LoginParams {
   username: string
   password: string
@@ -100,6 +151,43 @@ export async function apiFetchGoods(): Promise<unknown> {
 export async function apiPlaceOrder(): Promise<unknown> {
   // TODO: Implement based on the target site's API
   return http.post('/mock/order')
+}
+
+export interface DesignPageDto {
+  id: number
+  name: string
+  pageCategoryId?: number
+  siteId?: number
+  path?: string
+  title?: string
+  keywords?: string
+  description?: string
+  layout?: unknown
+  isIndex?: boolean
+  autoReleaseTime?: string | null
+  autoExpirationTime?: string | null
+  status?: unknown
+  pageType?: string
+  ext?: unknown
+  createdAt?: string
+  updatedAt?: string
+  deletedAt?: string | null
+}
+
+export async function apiListDesignPages(host = 'm.4008117117.com'): Promise<DesignPageDto[]> {
+  try {
+    const resp = await http.get<ApiEnvelope<DesignPageDto[]> | DesignPageDto[]>('/api/design/page/list', {
+      params: { host },
+    })
+
+    const data = resp.data as any
+    if (Array.isArray(data)) return data as DesignPageDto[]
+    if (data?.success === true && Array.isArray(data?.data)) return data.data as DesignPageDto[]
+    if (Array.isArray(data?.data)) return data.data as DesignPageDto[]
+    throw new Error('商品列表结构不符合预期')
+  } catch (e) {
+    throw new Error(extractApiErrorMessage(e, '获取商品列表失败'))
+  }
 }
 
 function extractApiErrorMessage(error: unknown, fallback: string): string {

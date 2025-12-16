@@ -1,10 +1,10 @@
 import { defineStore } from 'pinia'
 import dayjs from 'dayjs'
-import type { Account, AccountStatus } from '@/types/core'
+import type { Account } from '@/types/core'
 import { uid } from '@/utils/id'
 import { sleep } from '@/utils/sleep'
 import { useLogsStore } from '@/stores/logs'
-import { apiLoginBySmsCode, FIXED_DEVICE_ID } from '@/services/api'
+import { apiGetCurrentUser, apiLoginBySmsCode, FIXED_DEVICE_ID } from '@/services/api'
 
 const ACCOUNTS_STORAGE_KEY = 'rq_accounts_v1'
 const UUID_BY_MOBILE_KEY = 'rq_uuid_by_mobile_v1'
@@ -64,6 +64,8 @@ function loadAccountsFromStorage(): Account[] | null {
         remark: typeof a.remark === 'string' ? a.remark : undefined,
         uuid: typeof a.uuid === 'string' ? a.uuid : getOrCreateUuidForMobile(username),
         deviceId: typeof a.deviceId === 'string' ? a.deviceId : undefined,
+        token: typeof a.token === 'string' ? a.token : undefined,
+        profile: a.profile && typeof a.profile === 'object' ? a.profile : undefined,
       }
       return account
     })
@@ -78,6 +80,8 @@ function saveAccountsToStorage(accounts: Account[]) {
     remark: a.remark,
     uuid: a.uuid,
     deviceId: a.deviceId,
+    token: a.token,
+    profile: a.profile,
   }))
   window.localStorage.setItem(ACCOUNTS_STORAGE_KEY, JSON.stringify(payload))
 }
@@ -102,38 +106,15 @@ function extractToken(payload: unknown): string | undefined {
     data?.data?.accessToken,
     data?.data?.access_token,
     data?.data?.jwt,
+    data?.data?.extra?.token,
+    data?.extra?.token,
   ]
   return candidates.find((v) => typeof v === 'string')
 }
 
 export const useAccountsStore = defineStore('accounts', {
   state: () => ({
-    accounts:
-      loadAccountsFromStorage() ??
-      ([
-        {
-          id: uid('acc'),
-          nickname: '主号',
-          username: '13800000001',
-          password: '',
-          status: 'idle' as AccountStatus,
-          lastActiveAt: dayjs().subtract(10, 'minute').toISOString(),
-          remark: '示例账号（可删除）',
-          uuid: getOrCreateUuidForMobile('13800000001'),
-          deviceId: FIXED_DEVICE_ID,
-        },
-        {
-          id: uid('acc'),
-          nickname: '副号',
-          username: '13800000002',
-          password: '',
-          status: 'idle' as AccountStatus,
-          lastActiveAt: dayjs().subtract(25, 'minute').toISOString(),
-          remark: '示例账号（可删除）',
-          uuid: getOrCreateUuidForMobile('13800000002'),
-          deviceId: FIXED_DEVICE_ID,
-        },
-      ] as Account[]),
+    accounts: loadAccountsFromStorage() ?? ([] as Account[]),
   }),
   getters: {
     summary: (state) => {
@@ -225,6 +206,19 @@ export const useAccountsStore = defineStore('accounts', {
         target.status = 'logged_in'
         target.lastActiveAt = dayjs().toISOString()
         logs.addLog({ level: 'success', accountId: id, message: `账号「${target.nickname}」登录成功` })
+
+        if (target.token) {
+          try {
+            const profile = await apiGetCurrentUser(target.token)
+            target.profile = profile
+            const profileToken = extractToken(profile)
+            if (profileToken) target.token = profileToken
+          } catch (e) {
+            const message = e instanceof Error ? e.message : '获取用户信息失败'
+            logs.addLog({ level: 'warning', accountId: id, message: `账号「${target.nickname}」用户信息获取失败：${message}` })
+          }
+        }
+
         this.persist()
         return { ok: true }
       } catch (e) {
@@ -242,6 +236,7 @@ export const useAccountsStore = defineStore('accounts', {
       const logs = useLogsStore()
       target.token = undefined
       target.auth = undefined
+      target.profile = undefined
       target.status = 'idle'
       target.lastActiveAt = dayjs().toISOString()
       logs.addLog({ level: 'info', accountId: id, message: `账号「${target.nickname}」已退出` })
