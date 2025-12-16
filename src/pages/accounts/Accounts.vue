@@ -6,12 +6,37 @@ import dayjs from 'dayjs'
 import { storeToRefs } from 'pinia'
 import StatusTag from '@/components/StatusTag.vue'
 import { useAccountsStore } from '@/stores/accounts'
-import { apiGetCaptcha } from '@/services/api'
+import { apiGetCaptcha, apiSendSmsCode } from '@/services/api'
 
 const accountsStore = useAccountsStore()
 const { accounts } = storeToRefs(accountsStore)
 
 const selectionIds = ref<string[]>([])
+
+const addDialogVisible = ref(false)
+const addFormRef = ref<FormInstance>()
+const addForm = reactive({
+  username: '',
+  captchaCode: '',
+  smsCode: '',
+})
+const addRules: FormRules = {
+  username: [
+    { required: true, message: '请输入手机号', trigger: 'blur' },
+    { pattern: /^1\d{10}$/, message: '手机号格式不正确', trigger: 'blur' },
+  ],
+  captchaCode: [{ required: true, message: '请输入图形验证码', trigger: 'blur' }],
+  smsCode: [{ required: true, message: '请输入短信验证码', trigger: 'blur' }],
+}
+const addCaptcha = reactive({
+  token: '',
+  imageUrl: '',
+})
+const addCaptchaLoading = ref(false)
+const addSmsCountdown = ref(0)
+const addSmsSending = ref(false)
+const addSubmitting = ref(false)
+let addSmsTimer: number | undefined
 
 const dialogVisible = ref(false)
 const editingId = ref<string | null>(null)
@@ -27,8 +52,6 @@ const rules: FormRules = {
   username: [{ required: true, message: '请输入手机号', trigger: 'blur' }],
 }
 
-const dialogTitle = computed(() => (editingId.value ? '编辑账号' : '新增账号'))
-
 const loginDialogVisible = ref(false)
 const loginAccountId = ref<string | null>(null)
 const loginForm = reactive({
@@ -41,6 +64,7 @@ const captcha = reactive({
 })
 const captchaLoading = ref(false)
 const smsCountdown = ref(0)
+const smsSending = ref(false)
 let smsTimer: number | undefined
 
 const loginAccount = computed(() => {
@@ -53,12 +77,124 @@ function formatTime(value?: string) {
   return dayjs(value).format('YYYY-MM-DD HH:mm:ss')
 }
 
-function openAdd() {
-  editingId.value = null
-  formModel.nickname = ''
-  formModel.username = ''
-  formModel.remark = ''
-  dialogVisible.value = true
+function stopAddSmsTimer() {
+  if (addSmsTimer) window.clearInterval(addSmsTimer)
+  addSmsTimer = undefined
+  addSmsCountdown.value = 0
+}
+
+async function fetchAddCaptcha() {
+  addCaptchaLoading.value = true
+  try {
+    const data = await apiGetCaptcha()
+    addCaptcha.token = data.token
+    addCaptcha.imageUrl = data.imageUrl
+    addForm.captchaCode = ''
+  } catch (e) {
+    ElMessage.error(e instanceof Error ? e.message : '获取图形验证码失败')
+  } finally {
+    addCaptchaLoading.value = false
+  }
+}
+
+async function openAdd() {
+  addForm.username = ''
+  addForm.captchaCode = ''
+  addForm.smsCode = ''
+  addCaptcha.token = ''
+  addCaptcha.imageUrl = ''
+  addDialogVisible.value = true
+  stopAddSmsTimer()
+  await fetchAddCaptcha()
+}
+
+function closeAdd() {
+  addDialogVisible.value = false
+  addForm.username = ''
+  addForm.captchaCode = ''
+  addForm.smsCode = ''
+  addCaptcha.token = ''
+  addCaptcha.imageUrl = ''
+  addSmsSending.value = false
+  stopAddSmsTimer()
+}
+
+async function sendAddSmsCode() {
+  if (addSmsCountdown.value > 0 || addSmsSending.value) return
+
+  const phone = addForm.username.trim()
+  if (!/^1\d{10}$/.test(phone)) {
+    ElMessage.warning('请输入正确的手机号')
+    return
+  }
+  if (!addCaptcha.token) {
+    ElMessage.warning('请先获取图形验证码')
+    return
+  }
+  if (!addForm.captchaCode.trim()) {
+    ElMessage.warning('请输入图形验证码')
+    return
+  }
+
+  addSmsSending.value = true
+  try {
+    const ok = await apiSendSmsCode({
+      mobile: phone,
+      captcha: addForm.captchaCode.trim(),
+      token: addCaptcha.token,
+    })
+    if (!ok) throw new Error('发送短信验证码失败')
+    ElMessage.success('短信验证码已发送')
+
+    addSmsCountdown.value = 60
+    addSmsTimer = window.setInterval(() => {
+      addSmsCountdown.value -= 1
+      if (addSmsCountdown.value <= 0) stopAddSmsTimer()
+    }, 1000)
+  } catch (e) {
+    ElMessage.error(e instanceof Error ? e.message : '发送短信验证码失败')
+  } finally {
+    addSmsSending.value = false
+  }
+}
+
+function nicknameFromPhone(phone: string) {
+  const p = phone.trim()
+  const tail = p.slice(-4)
+  return `账号${tail || p}`
+}
+
+async function submitAdd() {
+  const ok = await addFormRef.value?.validate().catch(() => false)
+  if (!ok) return
+  if (!addCaptcha.token) {
+    ElMessage.warning('请先获取图形验证码')
+    return
+  }
+
+  const phone = addForm.username.trim()
+  if (accounts.value.some((a) => a.username === phone)) {
+    ElMessage.warning('该手机号已存在')
+    return
+  }
+
+  addSubmitting.value = true
+  try {
+    const created = accountsStore.addAccount({
+      nickname: nicknameFromPhone(phone),
+      username: phone,
+      remark: '',
+    })
+    await accountsStore.login(created.id, {
+      captchaToken: addCaptcha.token,
+      captchaCode: addForm.captchaCode.trim(),
+      smsCode: addForm.smsCode.trim(),
+    })
+    ElMessage.success('已新增账号（mock）')
+    closeAdd()
+  } finally {
+    addSubmitting.value = false
+  }
 }
 
 function openEdit(id: string) {
@@ -71,25 +207,17 @@ function openEdit(id: string) {
   dialogVisible.value = true
 }
 
-async function submit() {
+async function submitEdit() {
   const ok = await formRef.value?.validate().catch(() => false)
   if (!ok) return
+  if (!editingId.value) return
 
-  if (editingId.value) {
-    accountsStore.updateAccount(editingId.value, {
-      nickname: formModel.nickname,
-      username: formModel.username,
-      remark: formModel.remark,
-    })
-    ElMessage.success('已更新账号')
-  } else {
-    accountsStore.addAccount({
-      nickname: formModel.nickname,
-      username: formModel.username,
-      remark: formModel.remark,
-    })
-    ElMessage.success('已新增账号')
-  }
+  accountsStore.updateAccount(editingId.value, {
+    nickname: formModel.nickname,
+    username: formModel.username,
+    remark: formModel.remark,
+  })
+  ElMessage.success('已更新账号')
   dialogVisible.value = false
 }
 
@@ -103,11 +231,6 @@ async function removeAccount(id: string) {
 
 function onSelectionChange(rows: Array<{ id: string }>) {
   selectionIds.value = rows.map((r) => r.id)
-}
-
-async function batchLogin() {
-  void selectionIds.value
-  ElMessage.warning('短信登录不支持批量，请逐个账号登录')
 }
 
 function batchStart() {
@@ -162,11 +285,19 @@ function closeLogin() {
   loginForm.smsCode = ''
   captcha.token = ''
   captcha.imageUrl = ''
+  smsSending.value = false
   stopSmsTimer()
 }
 
-function sendSmsCode() {
+async function sendSmsCode() {
   if (!loginAccount.value) return
+  if (smsCountdown.value > 0 || smsSending.value) return
+
+  const phone = loginAccount.value.username.trim()
+  if (!/^1\d{10}$/.test(phone)) {
+    ElMessage.warning('手机号格式不正确')
+    return
+  }
   if (!captcha.token) {
     ElMessage.warning('请先获取图形验证码')
     return
@@ -175,13 +306,27 @@ function sendSmsCode() {
     ElMessage.warning('请输入图形验证码')
     return
   }
-  ElMessage.info('短信发送接口尚未对接：请提供发送短信验证码的 API（请求/响应示例）')
 
-  smsCountdown.value = 60
-  smsTimer = window.setInterval(() => {
-    smsCountdown.value -= 1
-    if (smsCountdown.value <= 0) stopSmsTimer()
-  }, 1000)
+  smsSending.value = true
+  try {
+    const ok = await apiSendSmsCode({
+      mobile: phone,
+      captcha: loginForm.captchaCode.trim(),
+      token: captcha.token,
+    })
+    if (!ok) throw new Error('发送短信验证码失败')
+    ElMessage.success('短信验证码已发送')
+
+    smsCountdown.value = 60
+    smsTimer = window.setInterval(() => {
+      smsCountdown.value -= 1
+      if (smsCountdown.value <= 0) stopSmsTimer()
+    }, 1000)
+  } catch (e) {
+    ElMessage.error(e instanceof Error ? e.message : '发送短信验证码失败')
+  } finally {
+    smsSending.value = false
+  }
 }
 
 async function confirmLogin() {
@@ -208,12 +353,10 @@ async function confirmLogin() {
           <div class="left">
             <el-space :size="8">
               <el-button type="primary" @click="openAdd">新增账号</el-button>
-              <el-button @click="batchLogin">批量登录</el-button>
               <el-button type="success" @click="batchStart">批量启动</el-button>
               <el-button type="warning" @click="batchStop">批量停止</el-button>
             </el-space>
           </div>
-          <div class="right" style="color: #909399">提示：这里先用 mock 登录/运行状态，后续会接入真实 API。</div>
         </div>
       </template>
 
@@ -247,7 +390,57 @@ async function confirmLogin() {
       </el-table>
     </el-card>
 
-    <el-dialog v-model="dialogVisible" :title="dialogTitle" width="520px" destroy-on-close>
+    <el-dialog
+      v-model="addDialogVisible"
+      title="新增账号"
+      width="520px"
+      destroy-on-close
+      @close="closeAdd"
+    >
+      <el-form ref="addFormRef" :model="addForm" :rules="addRules" label-width="110px">
+        <el-form-item label="手机号" prop="username">
+          <el-input v-model="addForm.username" placeholder="请输入手机号" autocomplete="off" />
+        </el-form-item>
+        <el-form-item label="图形验证码" prop="captchaCode">
+          <div class="captcha-row">
+            <el-input
+              v-model="addForm.captchaCode"
+              placeholder="请输入图形验证码"
+              style="flex: 1"
+              autocomplete="off"
+            />
+            <div class="captcha-img">
+              <el-skeleton :loading="addCaptchaLoading" animated>
+                <template #template>
+                  <div style="width: 120px; height: 40px" />
+                </template>
+                <template #default>
+                  <img v-if="addCaptcha.imageUrl" :src="addCaptcha.imageUrl" alt="captcha" />
+                  <div v-else style="width: 120px; height: 40px; background: #f2f3f5" />
+                </template>
+              </el-skeleton>
+            </div>
+            <el-button :loading="addCaptchaLoading" @click="fetchAddCaptcha">刷新</el-button>
+          </div>
+        </el-form-item>
+        <el-form-item label="短信验证码" prop="smsCode">
+          <div class="sms-row">
+            <el-input v-model="addForm.smsCode" placeholder="请输入短信验证码" style="flex: 1" autocomplete="off" />
+            <el-button :loading="addSmsSending" :disabled="addSmsCountdown > 0 || addSmsSending" @click="sendAddSmsCode">
+              {{ addSmsCountdown > 0 ? `${addSmsCountdown}s 后重试` : '获取短信验证码' }}
+            </el-button>
+          </div>
+        </el-form-item>
+      </el-form>
+      <template #footer>
+        <el-space :size="8">
+          <el-button @click="closeAdd">取消</el-button>
+          <el-button type="primary" :loading="addSubmitting" @click="submitAdd">保存</el-button>
+        </el-space>
+      </template>
+    </el-dialog>
+
+    <el-dialog v-model="dialogVisible" title="编辑账号" width="520px" destroy-on-close>
       <el-form ref="formRef" :model="formModel" :rules="rules" label-width="110px">
         <el-form-item label="昵称" prop="nickname">
           <el-input v-model="formModel.nickname" placeholder="例如：主号/副号" />
@@ -262,7 +455,7 @@ async function confirmLogin() {
       <template #footer>
         <el-space :size="8">
           <el-button @click="dialogVisible = false">取消</el-button>
-          <el-button type="primary" @click="submit">保存</el-button>
+          <el-button type="primary" @click="submitEdit">保存</el-button>
         </el-space>
       </template>
     </el-dialog>
@@ -303,12 +496,9 @@ async function confirmLogin() {
         <el-form-item label="短信验证码">
           <div class="sms-row">
             <el-input v-model="loginForm.smsCode" placeholder="请输入短信验证码" style="flex: 1" autocomplete="off" />
-            <el-button :disabled="smsCountdown > 0" @click="sendSmsCode">
+            <el-button :loading="smsSending" :disabled="smsCountdown > 0 || smsSending" @click="sendSmsCode">
               {{ smsCountdown > 0 ? `${smsCountdown}s 后重试` : '获取短信验证码' }}
             </el-button>
-          </div>
-          <div style="margin-top: 6px; color: #909399">
-            说明：已联通“获取图形验证码”接口；短信发送/短信登录接口待你提供抓包信息后继续对接。
           </div>
         </el-form-item>
       </el-form>

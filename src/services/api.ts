@@ -20,6 +20,20 @@ export async function apiGetCaptcha(): Promise<CaptchaData> {
   return resp.data.data
 }
 
+export interface SendSmsCodeParams {
+  mobile: string
+  captcha: string
+  token: string
+}
+
+export async function apiSendSmsCode(params: SendSmsCodeParams): Promise<boolean> {
+  const resp = await http.post<ApiEnvelope<boolean>>('/api/user/web/login/login-send-sms-code', params)
+  if (!resp.data?.success) {
+    throw new Error(resp.data?.message || '发送短信验证码失败')
+  }
+  return Boolean(resp.data.data)
+}
+
 export interface LoginParams {
   username: string
   password: string

@@ -40,7 +40,7 @@ export const useAccountsStore = defineStore('accounts', {
   },
   actions: {
     addAccount(payload: { nickname: string; username: string; password?: string; remark?: string }) {
-      this.accounts.unshift({
+      const account: Account = {
         id: uid('acc'),
         nickname: payload.nickname.trim(),
         username: payload.username.trim(),
@@ -48,7 +48,9 @@ export const useAccountsStore = defineStore('accounts', {
         status: 'idle',
         lastActiveAt: dayjs().toISOString(),
         remark: payload.remark?.trim(),
-      })
+      }
+      this.accounts.unshift(account)
+      return account
     },
     updateAccount(id: string, patch: Partial<Pick<Account, 'nickname' | 'username' | 'password' | 'remark'>>) {
       const target = this.accounts.find((a) => a.id === id)
