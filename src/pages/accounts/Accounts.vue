@@ -185,13 +185,14 @@ async function submitAdd() {
       username: phone,
       remark: '',
     })
-    await accountsStore.login(created.id, {
-      captchaToken: addCaptcha.token,
-      captchaCode: addForm.captchaCode.trim(),
-      smsCode: addForm.smsCode.trim(),
-    })
-    ElMessage.success('已新增账号（mock）')
-    closeAdd()
+    const result = await accountsStore.login(created.id, { smsCode: addForm.smsCode.trim() })
+    if (result.ok) {
+      ElMessage.success('已新增并登录')
+      closeAdd()
+    } else {
+      accountsStore.removeAccount(created.id)
+      ElMessage.error(result.message || '登录失败')
+    }
   } finally {
     addSubmitting.value = false
   }
@@ -335,13 +336,13 @@ async function confirmLogin() {
     ElMessage.warning('请输入短信验证码')
     return
   }
-  await accountsStore.login(loginAccount.value.id, {
-    captchaToken: captcha.token,
-    captchaCode: loginForm.captchaCode.trim(),
-    smsCode: loginForm.smsCode.trim(),
-  })
-  ElMessage.success('已登录（mock）')
-  closeLogin()
+  const result = await accountsStore.login(loginAccount.value.id, { smsCode: loginForm.smsCode.trim() })
+  if (result.ok) {
+    ElMessage.success('登录成功')
+    closeLogin()
+  } else {
+    ElMessage.error(result.message || '登录失败')
+  }
 }
 </script>
 

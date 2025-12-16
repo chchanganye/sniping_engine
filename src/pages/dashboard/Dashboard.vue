@@ -2,11 +2,14 @@
 import { computed } from 'vue'
 import { storeToRefs } from 'pinia'
 import dayjs from 'dayjs'
+import { useRouter } from 'vue-router'
 import StatusTag from '@/components/StatusTag.vue'
 import LogLevelTag from '@/components/LogLevelTag.vue'
 import { useAccountsStore } from '@/stores/accounts'
 import { useTasksStore } from '@/stores/tasks'
 import { useLogsStore } from '@/stores/logs'
+
+const router = useRouter()
 
 const accountsStore = useAccountsStore()
 const tasksStore = useTasksStore()
@@ -22,6 +25,10 @@ const recentTasks = computed(() => tasks.value.slice(0, 5))
 function formatTime(value?: string) {
   if (!value) return '-'
   return dayjs(value).format('YYYY-MM-DD HH:mm:ss')
+}
+
+function goAccounts() {
+  void router.push('/accounts')
 }
 </script>
 
@@ -62,7 +69,7 @@ function formatTime(value?: string) {
         <el-card shadow="never" header="账号运行情况">
           <el-table :data="accounts" size="small" style="width: 100%">
             <el-table-column prop="nickname" label="昵称" min-width="120" />
-            <el-table-column prop="username" label="登录名" min-width="150" />
+            <el-table-column prop="username" label="手机号" min-width="150" />
             <el-table-column label="状态" width="110">
               <template #default="{ row }">
                 <StatusTag kind="account" :status="row.status" />
@@ -76,7 +83,7 @@ function formatTime(value?: string) {
             <el-table-column label="操作" width="240">
               <template #default="{ row }">
                 <el-space :size="8">
-                  <el-button size="small" @click="accountsStore.login(row.id)" :disabled="row.status === 'logging_in'">
+                  <el-button size="small" @click="goAccounts" :disabled="row.status === 'logging_in'">
                     登录
                   </el-button>
                   <el-button size="small" type="success" @click="accountsStore.start(row.id)">

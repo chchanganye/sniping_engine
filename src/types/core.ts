@@ -6,6 +6,9 @@ export interface Account {
   username: string
   password?: string
   token?: string
+  auth?: unknown
+  deviceId?: string
+  uuid?: string
   status: AccountStatus
   lastActiveAt?: string
   remark?: string
