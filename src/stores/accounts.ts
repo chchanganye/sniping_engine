@@ -59,12 +59,13 @@ function loadAccountsFromStorage(): Account[] | null {
         id: String(a.id),
         nickname: typeof a.nickname === 'string' ? a.nickname : `账号${username.slice(-4)}`,
         username,
-        status: 'idle',
+        status: typeof a.token === 'string' && a.token ? 'logged_in' : 'idle',
         lastActiveAt: dayjs().toISOString(),
         remark: typeof a.remark === 'string' ? a.remark : undefined,
         uuid: typeof a.uuid === 'string' ? a.uuid : getOrCreateUuidForMobile(username),
         deviceId: typeof a.deviceId === 'string' ? a.deviceId : undefined,
         token: typeof a.token === 'string' ? a.token : undefined,
+        userId: typeof a.userId === 'number' ? a.userId : undefined,
         profile: a.profile && typeof a.profile === 'object' ? a.profile : undefined,
       }
       return account
@@ -81,6 +82,7 @@ function saveAccountsToStorage(accounts: Account[]) {
     uuid: a.uuid,
     deviceId: a.deviceId,
     token: a.token,
+    userId: a.userId,
     profile: a.profile,
   }))
   window.localStorage.setItem(ACCOUNTS_STORAGE_KEY, JSON.stringify(payload))
@@ -110,6 +112,18 @@ function extractToken(payload: unknown): string | undefined {
     data?.extra?.token,
   ]
   return candidates.find((v) => typeof v === 'string')
+}
+
+function extractUserId(payload: unknown): number | undefined {
+  const data = payload as any
+  const candidates = [
+    data?.userId,
+    data?.data?.userId,
+    data?.id,
+    data?.data?.id,
+  ]
+  const value = candidates.find((v) => typeof v === 'number' && Number.isFinite(v))
+  return typeof value === 'number' ? value : undefined
 }
 
 export const useAccountsStore = defineStore('accounts', {
@@ -203,6 +217,7 @@ export const useAccountsStore = defineStore('accounts', {
         })
         target.auth = data
         target.token = extractToken(data)
+        target.userId = extractUserId(data) ?? target.userId
         target.status = 'logged_in'
         target.lastActiveAt = dayjs().toISOString()
         logs.addLog({ level: 'success', accountId: id, message: `账号「${target.nickname}」登录成功` })
@@ -211,6 +226,7 @@ export const useAccountsStore = defineStore('accounts', {
           try {
             const profile = await apiGetCurrentUser(target.token)
             target.profile = profile
+            if (typeof profile?.id === 'number') target.userId = profile.id
             const profileToken = extractToken(profile)
             if (profileToken) target.token = profileToken
           } catch (e) {

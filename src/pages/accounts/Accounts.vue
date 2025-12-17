@@ -295,8 +295,11 @@ async function confirmLogin() {
       </template>
 
       <el-table :data="accounts" row-key="id">
-        <el-table-column label="用户id" min-width="160" show-overflow-tooltip>
+        <el-table-column label="用户名称" min-width="160" show-overflow-tooltip>
           <template #default="{ row }">{{ row.profile?.username ?? '-' }}</template>
+        </el-table-column>
+        <el-table-column label="用户id" width="110">
+          <template #default="{ row }">{{ row.userId ?? '-' }}</template>
         </el-table-column>
         <el-table-column prop="username" label="手机号" min-width="140" />
         <el-table-column label="令牌" min-width="260" show-overflow-tooltip>

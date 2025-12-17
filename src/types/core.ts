@@ -6,6 +6,7 @@ export interface Account {
   username: string
   password?: string
   token?: string
+  userId?: number
   auth?: unknown
   profile?: CurrentUser
   deviceId?: string
@@ -37,11 +38,78 @@ export interface CurrentUser {
   [key: string]: unknown
 }
 
+export interface ShippingAddress {
+  id: number
+  userId?: number
+  receiveUserName?: string | null
+  phone?: string | null
+  mobile?: string | null
+  provinceId?: number | null
+  province?: string | null
+  cityId?: number | null
+  city?: string | null
+  regionId?: number | null
+  region?: string | null
+  streetId?: number | null
+  street?: string | null
+  detail?: string | null
+  isDefault?: boolean
+  longitude: number
+  latitude: number
+  isAllCover?: boolean
+  createdAt?: number
+  updatedAt?: number
+  [key: string]: unknown
+}
+
+export interface ShopCategoryNode {
+  id: number
+  pid: number
+  level: number
+  name: string
+  hasChildren: boolean
+  hasBind?: boolean
+  logo?: string | null
+  index?: number
+  path?: string
+  childrenList: ShopCategoryNode[]
+  extra?: unknown
+  [key: string]: unknown
+}
+
+export interface StoreSkuModel {
+  id: number
+  skuId: number
+  itemId: number
+  storeId?: number
+  name: string
+  mainImage?: string | null
+  price?: number | null
+  originalPrice?: number | null
+  inStock?: number | null
+  purchaseLimit?: number | null
+  maxPurchaseLimit?: number | null
+  riskFlag?: string | null
+  [key: string]: unknown
+}
+
+export interface StoreSkuCategoryGroup {
+  categoryId: number
+  categoryName: string
+  logo?: string | null
+  extra?: unknown
+  storeSkuModelList: StoreSkuModel[]
+  [key: string]: unknown
+}
+
 export interface GoodsItem {
   id: string
   title: string
   price?: number
   stock?: number
+  imageUrl?: string
+  categoryId?: string
+  categoryName?: string
   startAt?: string
   endAt?: string
   tags?: string[]

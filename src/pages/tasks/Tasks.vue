@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed, onMounted, reactive, watch } from 'vue'
+import { computed, reactive, watch } from 'vue'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import dayjs from 'dayjs'
 import { storeToRefs } from 'pinia'
@@ -26,14 +26,6 @@ const formModel = reactive({
   accountIds: [] as string[],
   quantity: 1,
   scheduleAt: '' as string | '',
-})
-
-onMounted(() => {
-  if (goods.value.length === 0) {
-    void goodsStore.refresh('m.4008117117.com').catch((e) => {
-      ElMessage.error(e instanceof Error ? e.message : '获取商品列表失败')
-    })
-  }
 })
 
 watch(selectedGoodsId, (id) => {

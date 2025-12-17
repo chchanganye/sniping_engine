@@ -1,24 +1,130 @@
 <script setup lang="ts">
 import { computed, onMounted, ref, watch } from 'vue'
 import { ElMessage } from 'element-plus'
-import dayjs from 'dayjs'
 import { storeToRefs } from 'pinia'
+import type { ShippingAddress, ShopCategoryNode } from '@/types/core'
+import { useAccountsStore } from '@/stores/accounts'
 import { useGoodsStore } from '@/stores/goods'
 
+const accountsStore = useAccountsStore()
 const goodsStore = useGoodsStore()
-const { goods, selectedGoodsId, selectedGoods, loading } = storeToRefs(goodsStore)
+
+const { accounts } = storeToRefs(accountsStore)
+const {
+  addresses,
+  addressesLoading,
+  selectedAddressId,
+  longitude,
+  latitude,
+  categories,
+  categoriesLoading,
+  selectedCategoryId,
+  skuGroups,
+  selectedGroupId,
+  goods,
+  goodsLoading,
+  selectedGoodsId,
+} = storeToRefs(goodsStore)
+
+const accountId = ref<string>('')
+
+const accountOptions = computed(() =>
+  accounts.value
+    .filter((a) => a.token)
+    .map((a) => ({ label: `${a.username}`, value: a.id })),
+)
+
+const currentAccount = computed(() => accounts.value.find((a) => a.id === accountId.value) ?? null)
+
+const addressIdModel = computed<number | undefined>({
+  get: () => selectedAddressId.value,
+  set: (value) => goodsStore.setSelectedAddressId(typeof value === 'number' ? value : undefined),
+})
+
+function addressLabel(a: ShippingAddress) {
+  const parts = [a.province, a.city, a.region, a.street, a.detail].filter((v) => typeof v === 'string' && v.trim())
+  const base = parts.join('')
+  const receiver = a.receiveUserName ? `（${a.receiveUserName}）` : ''
+  const mobile = a.mobile || a.phone ? ` ${a.mobile || a.phone}` : ''
+  return `${base}${receiver}${mobile}`.trim() || String(a.id)
+}
+
+async function refreshAddresses() {
+  const token = currentAccount.value?.token
+  if (!token) {
+    ElMessage.warning('请先在「账号管理」登录账号')
+    return
+  }
+  try {
+    await goodsStore.loadAddresses(token)
+  } catch (e) {
+    ElMessage.error(e instanceof Error ? e.message : '获取收货地址失败')
+  }
+}
+
+async function refreshCategories() {
+  try {
+    await goodsStore.loadCategories()
+  } catch (e) {
+    ElMessage.error(e instanceof Error ? e.message : '获取分类失败')
+  }
+}
+
+async function loadGoodsByCategory(frontCategoryId: number) {
+  try {
+    await goodsStore.loadGoodsByCategory(frontCategoryId, 1, 500)
+  } catch (e) {
+    ElMessage.error(e instanceof Error ? e.message : '获取分类商品失败')
+  }
+}
+
+async function onTreeNodeClick(node: ShopCategoryNode) {
+  goodsStore.setSelectedCategoryId(node.id)
+  goodsStore.setSelectedGroupId(undefined)
+  await loadGoodsByCategory(node.id)
+}
+
+function setTarget(id: string) {
+  goodsStore.setSelectedGoods(id)
+  ElMessage.success('已设为目标商品')
+}
+
+function formatPrice(value?: number) {
+  if (typeof value !== 'number') return '-'
+  return `￥${(value / 100).toFixed(2)}`
+}
+
+const groupModel = computed<string>({
+  get: () => (typeof selectedGroupId.value === 'number' ? String(selectedGroupId.value) : 'all'),
+  set: (value) => {
+    if (value === 'all') {
+      goodsStore.setSelectedGroupId(undefined)
+      return
+    }
+    const id = Number(value)
+    goodsStore.setSelectedGroupId(Number.isFinite(id) ? id : undefined)
+  },
+})
 
 const keyword = ref('')
 const page = ref(1)
 const pageSize = ref(20)
 
+const groupGoods = computed(() => {
+  if (typeof selectedGroupId.value !== 'number') return goods.value
+  const key = String(selectedGroupId.value)
+  return goods.value.filter((g) => g.categoryId === key)
+})
+
 const filteredGoods = computed(() => {
   const kw = keyword.value.trim().toLowerCase()
-  if (!kw) return goods.value
-  return goods.value.filter((g) => {
+  const list = groupGoods.value
+  if (!kw) return list
+  return list.filter((g) => {
     const titleHit = (g.title ?? '').toLowerCase().includes(kw)
-    const pathHit = (g.path ?? '').toLowerCase().includes(kw)
-    return titleHit || pathHit
+    const idHit = (g.id ?? '').toLowerCase().includes(kw)
+    const catHit = (g.categoryName ?? '').toLowerCase().includes(kw)
+    return titleHit || idHit || catHit
   })
 })
 
@@ -30,64 +136,150 @@ const pageGoods = computed(() => {
   return filteredGoods.value.slice(start, end)
 })
 
-function formatTime(value?: string) {
-  if (!value) return '-'
-  return dayjs(value).format('YYYY-MM-DD HH:mm:ss')
-}
-
-function setTarget(id: string) {
-  goodsStore.setSelectedGoods(id)
-  ElMessage.success('已设为目标商品')
-}
-
-async function refresh() {
-  try {
-    await goodsStore.refresh('m.4008117117.com')
-  } catch (e) {
-    ElMessage.error(e instanceof Error ? e.message : '获取商品列表失败')
-  }
-}
-
-onMounted(() => {
-  void refresh()
+watch([keyword, pageSize], () => {
+  page.value = 1
 })
 
-watch(keyword, () => {
+watch(selectedGroupId, () => {
   page.value = 1
+})
+
+watch(accountId, () => {
+  void refreshAddresses()
+})
+
+watch(selectedAddressId, async (id) => {
+  if (!id) return
+  await refreshCategories()
+})
+
+watch(
+  categories,
+  async (list) => {
+    if (!Array.isArray(list) || list.length === 0) return
+    if (selectedCategoryId.value) return
+    const first = list[0]
+    if (!first) return
+    const target = first.childrenList?.[0] ?? first
+    goodsStore.setSelectedCategoryId(target.id)
+    await loadGoodsByCategory(target.id)
+    goodsStore.setSelectedGroupId(undefined)
+  },
+  { deep: false },
+)
+
+onMounted(() => {
+  if (accountOptions.value.length > 0 && !accountId.value) {
+    const first = accountOptions.value[0]
+    if (!first) return
+    accountId.value = first.value
+  }
 })
 </script>
 
 <template>
   <div class="page">
     <el-row :gutter="12">
-      <el-col :xs="24" :lg="16">
+      <el-col :xs="24" :lg="24">
         <el-card shadow="never">
           <template #header>
             <div class="toolbar">
-              <el-space :size="8">
-                <el-input v-model="keyword" placeholder="搜索名称或路径" style="width: 260px" clearable />
-                <el-button :loading="loading" @click="refresh">刷新</el-button>
+              <el-space :size="10" wrap>
+                <el-select v-model="accountId" placeholder="选择已登录账号" style="width: 220px">
+                  <el-option v-for="opt in accountOptions" :key="opt.value" :label="opt.label" :value="opt.value" />
+                </el-select>
+                <el-button :loading="addressesLoading" @click="refreshAddresses" :disabled="!accountId">
+                  刷新地址
+                </el-button>
+                <el-select
+                  v-model="addressIdModel"
+                  placeholder="选择收货地址"
+                  style="width: 520px"
+                  :loading="addressesLoading"
+                  filterable
+                  clearable
+                  :disabled="addresses.length === 0"
+                >
+                  <el-option v-for="a in addresses" :key="a.id" :label="addressLabel(a)" :value="a.id" />
+                </el-select>
+                <el-tag v-if="longitude != null && latitude != null" type="info" effect="light">
+                  经度 {{ longitude }} / 纬度 {{ latitude }}
+                </el-tag>
+              </el-space>
+            </div>
+          </template>
+
+          <div v-if="accountOptions.length === 0" style="color: #909399">
+            暂无已登录账号：请先到「账号管理」完成短信登录，再回来加载地址/分类/商品。
+          </div>
+        </el-card>
+      </el-col>
+    </el-row>
+
+    <el-row :gutter="12" style="margin-top: 12px">
+      <el-col :xs="24" :lg="6">
+        <el-card shadow="never" header="商品分类">
+          <el-tree
+            v-loading="categoriesLoading"
+            :data="categories"
+            node-key="id"
+            :props="{ label: 'name', children: 'childrenList' }"
+            highlight-current
+            :current-node-key="selectedCategoryId"
+            @node-click="onTreeNodeClick"
+          />
+          <div v-if="!categoriesLoading && categories.length === 0" style="padding: 8px 0; color: #909399">
+            还没有分类数据：先选择地址，再点击“加载分类”。
+          </div>
+        </el-card>
+      </el-col>
+
+      <el-col :xs="24" :lg="18">
+        <el-card shadow="never">
+          <template #header>
+            <div class="goods-toolbar">
+              <el-space :size="8" wrap>
+                <el-input v-model="keyword" placeholder="搜索：名称 / ID / 分类" style="width: 260px" clearable />
               </el-space>
               <div style="color: #909399">共 {{ total }} 条</div>
             </div>
           </template>
 
-          <el-table :data="pageGoods" row-key="id" style="width: 100%">
-            <el-table-column prop="id" label="ID" width="90" />
-            <el-table-column prop="title" label="名称" min-width="240" show-overflow-tooltip />
-            <el-table-column prop="path" label="路径" min-width="260" show-overflow-tooltip />
-            <el-table-column prop="pageCategoryId" label="分类ID" width="90" />
-            <el-table-column label="类型" width="110">
+          <div v-if="skuGroups.length > 0" style="margin-bottom: 10px">
+            <el-radio-group v-model="groupModel" size="small">
+              <el-radio-button label="all">全部</el-radio-button>
+              <el-radio-button v-for="g in skuGroups" :key="g.categoryId" :label="String(g.categoryId)">
+                {{ g.categoryName || g.categoryId }}
+              </el-radio-button>
+            </el-radio-group>
+          </div>
+
+          <el-table v-loading="goodsLoading" :data="pageGoods" row-key="id" style="width: 100%">
+            <el-table-column label="图片" width="86">
               <template #default="{ row }">
-                <el-tag v-if="row.pageType" size="small" effect="light">{{ row.pageType }}</el-tag>
-                <span v-else style="color: #909399">-</span>
+                <el-image
+                  v-if="row.imageUrl"
+                  :src="row.imageUrl"
+                  fit="cover"
+                  style="width: 56px; height: 56px; border-radius: 6px"
+                  :preview-src-list="[row.imageUrl]"
+                  preview-teleported
+                />
+                <span v-else style="color: #c0c4cc">-</span>
               </template>
             </el-table-column>
-            <el-table-column label="更新时间" width="170">
-              <template #default="{ row }">{{ formatTime(row.updatedAt) }}</template>
+            <el-table-column prop="title" label="名称" min-width="260" show-overflow-tooltip />
+            <el-table-column prop="id" label="SKU" width="140" show-overflow-tooltip />
+            <el-table-column label="分类" min-width="140" show-overflow-tooltip>
+              <template #default="{ row }">
+                <span>{{ row.categoryName || '-' }}</span>
+              </template>
             </el-table-column>
-            <el-table-column label="创建时间" width="170">
-              <template #default="{ row }">{{ formatTime(row.createdAt) }}</template>
+            <el-table-column label="价格" width="120">
+              <template #default="{ row }">{{ formatPrice(row.price) }}</template>
+            </el-table-column>
+            <el-table-column label="库存" width="90">
+              <template #default="{ row }">{{ typeof row.stock === 'number' ? row.stock : '-' }}</template>
             </el-table-column>
             <el-table-column label="目标" width="70">
               <template #default="{ row }">
@@ -95,7 +287,7 @@ watch(keyword, () => {
                 <span v-else style="color: #c0c4cc">-</span>
               </template>
             </el-table-column>
-            <el-table-column label="操作" width="140">
+            <el-table-column label="操作" width="130">
               <template #default="{ row }">
                 <el-button size="small" type="primary" @click="setTarget(row.id)" :disabled="row.id === selectedGoodsId">
                   设为目标
@@ -114,21 +306,10 @@ watch(keyword, () => {
               background
             />
           </div>
-        </el-card>
-      </el-col>
 
-      <el-col :xs="24" :lg="8">
-        <el-card shadow="never" header="目标商品">
-          <div v-if="!selectedGoods" style="color: #909399">尚未选择目标商品</div>
-          <el-descriptions v-else :column="1" size="small" border>
-            <el-descriptions-item label="ID">{{ selectedGoods.id }}</el-descriptions-item>
-            <el-descriptions-item label="名称">{{ selectedGoods.title }}</el-descriptions-item>
-            <el-descriptions-item label="路径">{{ selectedGoods.path || '-' }}</el-descriptions-item>
-            <el-descriptions-item label="分类ID">{{ selectedGoods.pageCategoryId ?? '-' }}</el-descriptions-item>
-            <el-descriptions-item label="类型">{{ selectedGoods.pageType || '-' }}</el-descriptions-item>
-            <el-descriptions-item label="更新时间">{{ formatTime(selectedGoods.updatedAt) }}</el-descriptions-item>
-            <el-descriptions-item label="创建时间">{{ formatTime(selectedGoods.createdAt) }}</el-descriptions-item>
-          </el-descriptions>
+          <div v-if="!goodsLoading && skuGroups.length === 0" style="padding: 8px 0; color: #909399">
+            暂无商品：请在左侧选择一个分类加载商品。
+          </div>
         </el-card>
       </el-col>
     </el-row>
@@ -137,6 +318,13 @@ watch(keyword, () => {
 
 <style scoped>
 .toolbar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.goods-toolbar {
   display: flex;
   align-items: center;
   justify-content: space-between;
