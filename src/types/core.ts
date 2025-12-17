@@ -127,13 +127,15 @@ export interface GoodsItem {
   raw?: unknown
 }
 
+export type TaskMode = 'rush' | 'scan'
+
 export type TaskStatus = 'idle' | 'scheduled' | 'running' | 'success' | 'failed' | 'stopped'
 
 export interface Task {
   id: string
   goodsId: string
   goodsTitle: string
-  accountIds: string[]
+  mode: TaskMode
   quantity: number
   scheduleAt?: string
   status: TaskStatus

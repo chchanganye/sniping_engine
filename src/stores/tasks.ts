@@ -1,14 +1,37 @@
 import { defineStore } from 'pinia'
 import dayjs from 'dayjs'
-import type { Task, TaskStatus } from '@/types/core'
-import { uid } from '@/utils/id'
+import type { Task, TaskMode } from '@/types/core'
 import { sleep } from '@/utils/sleep'
 import { useLogsStore } from '@/stores/logs'
 import { useAccountsStore } from '@/stores/accounts'
 import { useGoodsStore } from '@/stores/goods'
-import { apiListShippingAddresses, apiTradeCreateOrder, buildTradeCreateOrderPayload, FIXED_DEVICE_ID } from '@/services/api'
+import {
+  apiListShippingAddresses,
+  apiTradeCreateOrder,
+  apiTradeRenderOrder,
+  buildTradeCreateOrderPayloadFromRender,
+  buildTradeRenderOrderPayload,
+  FIXED_DEVICE_ID,
+} from '@/services/api'
 
 const taskControllers = new Map<string, AbortController>()
+
+function resolveDivisionIds(address: any): string | undefined {
+  const candidates = [address?.divisionIds, address?.divisionLevels, address?.divisionIdLevels]
+  const text = candidates.find((v) => typeof v === 'string' && v.trim())
+  if (typeof text === 'string' && text.trim()) return text.trim()
+
+  const rawLevels = address?.divisionLevels
+  if (Array.isArray(rawLevels)) {
+    const nums = rawLevels.filter((v) => typeof v === 'number' && Number.isFinite(v))
+    if (nums.length > 0) return nums.join(',')
+  }
+
+  const parts = [address?.provinceId, address?.cityId, address?.regionId].filter(
+    (v): v is number => typeof v === 'number' && Number.isFinite(v),
+  )
+  return parts.length > 0 ? parts.join(',') : undefined
+}
 
 export const useTasksStore = defineStore('tasks', {
   state: () => ({
@@ -24,7 +47,49 @@ export const useTasksStore = defineStore('tasks', {
     },
   },
   actions: {
-    async runCreateOrderRush(taskId: string, controller: AbortController) {
+    syncFromTargetGoods() {
+      const goodsStore = useGoodsStore()
+      const nextIds = new Set(goodsStore.targetGoods.map((g) => g.id))
+
+      for (const item of goodsStore.targetGoods) {
+        const existing = this.tasks.find((t) => t.goodsId === item.id)
+        if (existing) {
+          existing.goodsTitle = item.title
+          continue
+        }
+        const task: Task = {
+          id: item.id,
+          goodsId: item.id,
+          goodsTitle: item.title,
+          mode: 'rush',
+          quantity: 1,
+          scheduleAt: undefined,
+          status: 'idle',
+          createdAt: dayjs().toISOString(),
+          successCount: 0,
+          failCount: 0,
+        }
+        this.tasks.unshift(task)
+      }
+
+      const removed = this.tasks.filter((t) => !nextIds.has(t.goodsId))
+      for (const task of removed) {
+        const controller = taskControllers.get(task.id)
+        if (controller) controller.abort()
+        taskControllers.delete(task.id)
+      }
+      this.tasks = this.tasks.filter((t) => nextIds.has(t.goodsId))
+    },
+    updateTaskConfig(goodsId: string, patch: Partial<Pick<Task, 'mode' | 'quantity' | 'scheduleAt'>>) {
+      const task = this.tasks.find((t) => t.goodsId === goodsId)
+      if (!task) return
+      if (patch.mode) task.mode = patch.mode
+      if (typeof patch.quantity === 'number' && Number.isFinite(patch.quantity)) {
+        task.quantity = Math.max(1, Math.floor(patch.quantity))
+      }
+      if (typeof patch.scheduleAt === 'string') task.scheduleAt = patch.scheduleAt
+    },
+    async runTask(taskId: string, controller: AbortController) {
       try {
         const task = this.tasks.find((t) => t.id === taskId)
         if (!task) return
@@ -33,38 +98,29 @@ export const useTasksStore = defineStore('tasks', {
         const accountsStore = useAccountsStore()
         const goodsStore = useGoodsStore()
 
-        const goods = goodsStore.goods.find((g) => g.id === task.goodsId) ?? goodsStore.targetGoods.find((g) => g.id === task.goodsId)
+        const goods = goodsStore.targetGoods.find((g) => g.id === task.goodsId) ?? goodsStore.goods.find((g) => g.id === task.goodsId)
         const sku = goods?.raw as any
 
         const itemId = Number(sku?.itemId ?? goods?.id)
         const skuId = Number(sku?.skuId ?? sku?.itemId ?? goods?.id)
         const shopId = Number(sku?.storeId)
-        const sellerId = typeof sku?.sellerId === 'number' ? sku.sellerId : undefined
-        const skuCode = typeof sku?.skuCode === 'string' ? sku.skuCode : null
-        const categoryId = typeof sku?.categoryId === 'number' ? sku.categoryId : null
         const skuName = typeof sku?.name === 'string' ? sku.name : goods?.title ?? null
-        const mainImage = typeof sku?.mainImage === 'string' ? sku.mainImage : (goods?.imageUrl ?? null)
-        const salePrice = typeof sku?.price === 'number' ? sku.price : null
-        const fullUnit = typeof sku?.fullUnit === 'string' ? sku.fullUnit : null
 
         if (!goods || !Number.isFinite(itemId) || !Number.isFinite(skuId)) {
           task.status = 'failed'
-          task.lastMessage = '缺少商品信息，请先在「商品列表」加载并选择目标商品'
+          task.lastMessage = '缺少商品信息，请先在「商品列表」加入目标清单'
           logs.addLog({ level: 'error', taskId, message: task.lastMessage })
           return
         }
 
         if (!Number.isFinite(shopId)) {
           task.status = 'failed'
-          task.lastMessage = '缺少 shopId/storeId（下单所需），请重新加载商品列表'
+          task.lastMessage = '缺少 shopId/storeId（下单所需），请重新加载商品列表后再加入目标清单'
           logs.addLog({ level: 'error', taskId, message: task.lastMessage })
           return
         }
 
-        const candidates = task.accountIds
-          .map((id) => accountsStore.accounts.find((a) => a.id === id) ?? null)
-          .filter((a): a is NonNullable<typeof a> => Boolean(a))
-          .filter((a) => Boolean(a.token))
+        const candidates = accountsStore.accounts.filter((a) => Boolean(a.token))
 
         if (candidates.length === 0) {
           task.status = 'failed'
@@ -78,7 +134,8 @@ export const useTasksStore = defineStore('tasks', {
           username: string
           token: string
           addressId: number
-          deviceId?: string
+          devicesId: string
+          divisionIds?: string
         }> = []
 
         for (const account of candidates) {
@@ -92,7 +149,8 @@ export const useTasksStore = defineStore('tasks', {
               username: account.username,
               token: account.token as string,
               addressId: addr.id,
-              deviceId: account.deviceId,
+              devicesId: account.deviceId ?? FIXED_DEVICE_ID,
+              divisionIds: resolveDivisionIds(addr),
             })
           } catch (e) {
             const message = e instanceof Error ? e.message : '获取收货地址失败'
@@ -121,44 +179,71 @@ export const useTasksStore = defineStore('tasks', {
           return
         }
 
-        const maxAttempts = 60
-        const intervalMs = 120
+        const mode: TaskMode = task.mode
+        const targetTotal = Math.max(1, Math.floor(task.quantity || 1))
+        task.quantity = targetTotal
+
+        if (task.scheduleAt) {
+          const startAt = dayjs(task.scheduleAt)
+          if (startAt.isValid() && startAt.isAfter(dayjs())) {
+            task.status = 'scheduled'
+            task.lastMessage = `等待开始：${startAt.format('YYYY-MM-DD HH:mm:ss')}`
+            while (!controller.signal.aborted && dayjs().isBefore(startAt)) {
+              await sleep(200)
+            }
+          }
+        }
+
+        if (controller.signal.aborted) {
+          task.status = 'stopped'
+          task.lastMessage = '已停止'
+          logs.addLog({ level: 'warning', taskId, message: '任务已停止' })
+          return
+        }
+
+        task.status = 'running'
+        task.lastMessage = mode === 'scan' ? '扫货中…' : '抢购中…'
+        logs.addLog({ level: 'info', taskId, message: `开始执行：${task.goodsTitle}（${mode === 'scan' ? '扫货' : '抢购'}）` })
+
+        const pollDelayMs = mode === 'scan' ? 800 : 120
 
         let lastError = ''
-
-        for (let attempt = 1; attempt <= maxAttempts; attempt += 1) {
-          if (controller.signal.aborted) break
-
-          task.lastMessage = `第 ${attempt}/${maxAttempts} 轮抢购中…`
-
+        while (!controller.signal.aborted && task.successCount < targetTotal) {
           for (const ctx of accountContexts) {
             if (controller.signal.aborted) break
+
             try {
-              const payload = buildTradeCreateOrderPayload({
-                addressId: ctx.addressId,
-                quantity: task.quantity,
-                deviceSource: 'WXAPP',
-                orderSource: 'product.detail.page',
-                devicesId: ctx.deviceId ?? FIXED_DEVICE_ID,
-                settleAccountId: typeof sellerId === 'number' ? String(sellerId) : '',
+              const renderPayload = buildTradeRenderOrderPayload({
                 sku: {
                   itemId,
                   skuId,
                   shopId,
-                  skuCode,
-                  categoryId,
                   skuName,
-                  mainImage,
-                  salePrice,
-                  fullUnit,
-                  itemAttributes: null,
                 },
+                quantity: 1,
+                deviceSource: 'WXAPP',
+                orderSource: 'product.detail.page',
+                devicesId: ctx.devicesId,
+                divisionIds: ctx.divisionIds,
+                addressId: ctx.addressId,
               })
 
-              const data = await apiTradeCreateOrder(ctx.token, payload, { signal: controller.signal })
+              const renderData = await apiTradeRenderOrder(ctx.token, renderPayload, { signal: controller.signal })
+              const canBuy = Boolean(renderData?.purchaseStatus?.canBuy)
+              if (!canBuy) {
+                task.lastMessage = mode === 'scan' ? '暂无库存，持续扫货中…' : '未满足购买条件，继续抢购…'
+                continue
+              }
+
+              const createPayload = buildTradeCreateOrderPayloadFromRender(renderData, {
+                deviceSource: 'WXAPP',
+                buyConfig: renderPayload.buyConfig,
+                orderSource: renderPayload.orderSource,
+              })
+
+              const data = await apiTradeCreateOrder(ctx.token, createPayload, { signal: controller.signal })
               task.successCount += 1
-              task.status = 'success'
-              task.lastMessage = `下单成功（purchaseOrderId=${data.purchaseOrderId ?? '-'}）`
+              task.lastMessage = `下单成功 ${task.successCount}/${targetTotal}（purchaseOrderId=${data.purchaseOrderId ?? '-'}）`
               logs.addLog({
                 level: 'success',
                 taskId,
@@ -166,104 +251,90 @@ export const useTasksStore = defineStore('tasks', {
                 message: `抢购下单成功：${skuName ?? goods.title}（purchaseOrderId=${data.purchaseOrderId ?? '-'}）`,
               })
 
-              controller.abort()
-              break
+              if (task.successCount >= targetTotal) break
             } catch (e) {
               const message = e instanceof Error ? e.message : '创建订单失败'
               task.failCount += 1
               lastError = message
-              if (attempt === 1 || attempt % 10 === 0) {
-                logs.addLog({
-                  level: 'warning',
-                  taskId,
-                  accountId: ctx.accountId,
-                  message: `第 ${attempt} 轮下单失败：${message}`,
-                })
+              if (task.failCount === 1 || task.failCount % 10 === 0) {
+                logs.addLog({ level: 'warning', taskId, accountId: ctx.accountId, message: `下单失败：${message}` })
               }
             }
           }
 
-          if (task.status === 'success') return
-          if (controller.signal.aborted) break
-          await sleep(intervalMs)
+          if (task.successCount >= targetTotal) break
+          if (!controller.signal.aborted) await sleep(pollDelayMs)
         }
 
-        if (task.status === 'success') return
-
         if (controller.signal.aborted) {
-          if (task.status === 'running') {
-            task.status = 'stopped'
-            task.lastMessage = '已停止'
-            logs.addLog({ level: 'warning', taskId, message: '任务已停止' })
-          }
+          task.status = 'stopped'
+          task.lastMessage = '已停止'
+          logs.addLog({ level: 'warning', taskId, message: '任务已停止' })
+          return
+        }
+
+        if (task.successCount >= targetTotal) {
+          task.status = 'success'
+          task.lastMessage = `已完成：${task.successCount}/${targetTotal}`
+          logs.addLog({ level: 'success', taskId, message: `任务完成：${task.goodsTitle}` })
           return
         }
 
         task.status = 'failed'
-        task.lastMessage = lastError ? `抢购失败：${lastError}` : '抢购失败'
+        task.lastMessage = lastError ? `执行失败：${lastError}` : '执行失败'
         logs.addLog({ level: 'error', taskId, message: task.lastMessage })
       } finally {
         const current = taskControllers.get(taskId)
         if (current === controller) taskControllers.delete(taskId)
       }
     },
-    createTask(payload: {
-      goodsId: string
-      goodsTitle: string
-      accountIds: string[]
-      quantity: number
-      scheduleAt?: string
-    }) {
-      const task: Task = {
-        id: uid('task'),
-        goodsId: payload.goodsId,
-        goodsTitle: payload.goodsTitle,
-        accountIds: payload.accountIds,
-        quantity: payload.quantity,
-        scheduleAt: payload.scheduleAt,
-        status: payload.scheduleAt ? ('scheduled' as TaskStatus) : ('idle' as TaskStatus),
-        createdAt: dayjs().toISOString(),
-        successCount: 0,
-        failCount: 0,
-      }
-      this.tasks.unshift(task)
-      const logs = useLogsStore()
-      logs.addLog({ level: 'info', taskId: task.id, message: `已创建任务「${task.goodsTitle}」` })
-      return task
-    },
-    startTask(id: string) {
-      const target = this.tasks.find((t) => t.id === id)
+    startTask(goodsId: string) {
+      this.syncFromTargetGoods()
+      const target = this.tasks.find((t) => t.goodsId === goodsId)
       if (!target) return
       const logs = useLogsStore()
       if (target.status === 'running') return
       target.successCount = 0
       target.failCount = 0
-      target.status = 'running'
-      target.lastMessage = '任务开始运行…'
-      logs.addLog({ level: 'info', taskId: id, message: `任务「${target.goodsTitle}」开始运行` })
+      const startAt = target.scheduleAt ? dayjs(target.scheduleAt) : null
+      if (startAt && startAt.isValid() && startAt.isAfter(dayjs())) {
+        target.status = 'scheduled'
+        target.lastMessage = `等待开始：${startAt.format('YYYY-MM-DD HH:mm:ss')}`
+        logs.addLog({ level: 'info', taskId: target.id, message: `任务「${target.goodsTitle}」已排队，等待开始` })
+      } else {
+        target.status = 'running'
+        target.lastMessage = '任务开始运行…'
+        logs.addLog({ level: 'info', taskId: target.id, message: `任务「${target.goodsTitle}」开始运行` })
+      }
 
-      const existing = taskControllers.get(id)
+      const existing = taskControllers.get(target.id)
       if (existing) existing.abort()
       const controller = new AbortController()
-      taskControllers.set(id, controller)
-      void this.runCreateOrderRush(id, controller)
+      taskControllers.set(target.id, controller)
+      void this.runTask(target.id, controller)
     },
-    stopTask(id: string) {
-      const target = this.tasks.find((t) => t.id === id)
+    startAll() {
+      this.syncFromTargetGoods()
+      for (const task of this.tasks) {
+        if (task.status === 'running' || task.status === 'scheduled') continue
+        this.startTask(task.goodsId)
+      }
+    },
+    stopTask(goodsId: string) {
+      const target = this.tasks.find((t) => t.goodsId === goodsId)
       if (!target) return
       const logs = useLogsStore()
-      const controller = taskControllers.get(id)
+      const controller = taskControllers.get(target.id)
       if (controller) controller.abort()
-      taskControllers.delete(id)
+      taskControllers.delete(target.id)
       target.status = 'stopped'
       target.lastMessage = '已停止'
-      logs.addLog({ level: 'warning', taskId: id, message: `任务「${target.goodsTitle}」已停止` })
+      logs.addLog({ level: 'warning', taskId: target.id, message: `任务「${target.goodsTitle}」已停止` })
     },
-    removeTask(id: string) {
-      const controller = taskControllers.get(id)
-      if (controller) controller.abort()
-      taskControllers.delete(id)
-      this.tasks = this.tasks.filter((t) => t.id !== id)
+    stopAll() {
+      for (const task of this.tasks) {
+        this.stopTask(task.goodsId)
+      }
     },
   },
 })

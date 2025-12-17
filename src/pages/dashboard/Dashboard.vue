@@ -126,8 +126,8 @@ function goAccounts() {
                 <StatusTag kind="task" :status="row.status" />
               </template>
             </el-table-column>
-            <el-table-column label="账号数" width="90">
-              <template #default="{ row }">{{ row.accountIds.length }}</template>
+            <el-table-column label="进度" width="110">
+              <template #default="{ row }">{{ row.successCount }}/{{ row.quantity }}</template>
             </el-table-column>
             <el-table-column label="创建时间" width="170">
               <template #default="{ row }">{{ formatTime(row.createdAt) }}</template>

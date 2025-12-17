@@ -209,6 +209,202 @@ export async function apiSearchStoreSkuByCategory(params: {
 
 export type TradeDeviceSource = 'H5' | 'WXAPP' | string
 
+export interface TradeRenderOrderLine {
+  skuId: number
+  itemId: number
+  quantity: number
+  promotionTag?: unknown
+  activityId?: unknown
+  extra?: Record<string, unknown>
+  shopId: number
+  [key: string]: unknown
+}
+
+export interface TradeRenderOrderRequest {
+  deviceSource: TradeDeviceSource
+  orderSource?: string
+  buyConfig?: Record<string, unknown>
+  itemName?: string | null
+  orderLineList: TradeRenderOrderLine[]
+  divisionIds?: string
+  addressId?: number | null
+  couponParams?: TradeCreateOrderCouponParam[]
+  benefitParams?: TradeCreateOrderBenefitParam[]
+  delivery?: Record<string, unknown>
+  extra?: Record<string, unknown>
+  devicesId?: string
+  [key: string]: unknown
+}
+
+export interface TradeRenderOrderResponseData {
+  extra?: Record<string, unknown>
+  orderList?: unknown[]
+  addressInfoList?: Array<Record<string, unknown>>
+  deliveryInfoList?: unknown[]
+  invoiceInfoList?: unknown[]
+  totalSkuNum?: number
+  shipFee?: unknown
+  memberPointsDeductionInfo?: Record<string, unknown>
+  shopDiscountFee?: number
+  platformDiscountFee?: number
+  totalTaxFee?: number
+  skuTotalFee?: number
+  priceInfo?: Record<string, unknown>
+  totalFee?: number
+  purchaseStatus?: Record<string, unknown> & { canBuy?: boolean }
+  visibleInfo?: Record<string, unknown>
+  benefitInfo?: unknown
+  couponInfo?: unknown
+  sellCouponInfo?: unknown
+  orderLineList?: unknown[]
+  couponParams?: TradeCreateOrderCouponParam[]
+  benefitParams?: TradeCreateOrderBenefitParam[]
+  delivery?: Record<string, unknown>
+  [key: string]: unknown
+}
+
+export async function apiTradeRenderOrder(
+  token: string,
+  payload: TradeRenderOrderRequest,
+  options?: { signal?: AbortSignal },
+): Promise<TradeRenderOrderResponseData> {
+  if (!token) throw new Error('缺少 token')
+  try {
+    const resp = await http.post<ApiEnvelope<TradeRenderOrderResponseData>>('/api/trade/buy/render-order', payload, {
+      headers: {
+        Authorization: `Bearer ${token}`,
+        token,
+        'x-token': token,
+      },
+      signal: options?.signal,
+    })
+    if ((resp.data as any)?.error) throw new Error(String((resp.data as any).error))
+    if (!resp.data?.success) throw new Error(resp.data?.message || '渲染订单失败')
+    return resp.data.data
+  } catch (e) {
+    throw new Error(extractApiErrorMessage(e, '渲染订单失败'))
+  }
+}
+
+export interface BuildTradeRenderOrderPayloadParams {
+  sku: {
+    itemId: number
+    skuId: number
+    shopId: number
+    skuName?: string | null
+  }
+  quantity: number
+  devicesId?: string
+  divisionIds?: string
+  addressId?: number | null
+  deviceSource?: TradeDeviceSource
+  orderSource?: string
+}
+
+export function buildTradeRenderOrderPayload(params: BuildTradeRenderOrderPayloadParams): TradeRenderOrderRequest {
+  const deviceSource: TradeDeviceSource = params.deviceSource ?? 'WXAPP'
+  const orderSource = params.orderSource ?? 'product.detail.page'
+  const itemId = Number(params.sku.itemId)
+  const skuId = Number(params.sku.skuId)
+  const shopId = Number(params.sku.shopId)
+
+  return {
+    deviceSource,
+    orderSource,
+    buyConfig: { lineGrouped: true, multipleCoupon: true },
+    itemName: params.sku.skuName ?? null,
+    orderLineList: [
+      {
+        skuId,
+        itemId,
+        quantity: params.quantity,
+        promotionTag: null,
+        activityId: null,
+        extra: {},
+        shopId,
+      },
+    ],
+    divisionIds: params.divisionIds,
+    addressId: typeof params.addressId === 'number' ? params.addressId : null,
+    couponParams: [],
+    benefitParams: [],
+    delivery: {},
+    extra: {
+      renewOriginOrderId: '',
+      renewOriginAddressId: '',
+      activityGroupId: null,
+    },
+    devicesId: params.devicesId,
+  }
+}
+
+function pickRenderAddressId(render: TradeRenderOrderResponseData): number | undefined {
+  const list = Array.isArray(render.addressInfoList) ? render.addressInfoList : []
+  const pick = list.find((a: any) => a?.checked === true) ?? list.find((a: any) => a?.isDefault === true) ?? list[0]
+  const id = (pick as any)?.id
+  return typeof id === 'number' && Number.isFinite(id) ? id : undefined
+}
+
+function pickRenderSkuName(render: TradeRenderOrderResponseData): string | null {
+  const line0 = Array.isArray((render as any).orderLineList) ? (render as any).orderLineList[0] : undefined
+  if (line0 && typeof line0.skuName === 'string') return line0.skuName
+
+  const order0 = Array.isArray(render.orderList) ? (render.orderList as any)[0] : undefined
+  const skuName = order0?.activityOrderList?.[0]?.orderLineGroups?.[0]?.orderLineList?.[0]?.skuName
+  return typeof skuName === 'string' ? skuName : null
+}
+
+function pickRenderTotalFee(render: TradeRenderOrderResponseData): number | undefined {
+  if (typeof render.totalFee === 'number' && Number.isFinite(render.totalFee)) return render.totalFee
+  const candidate = (render.priceInfo as any)?.totalFee
+  return typeof candidate === 'number' && Number.isFinite(candidate) ? candidate : undefined
+}
+
+export function buildTradeCreateOrderPayloadFromRender(
+  render: TradeRenderOrderResponseData,
+  params?: { deviceSource?: TradeDeviceSource; buyConfig?: Record<string, unknown>; orderSource?: string },
+): TradeCreateOrderRequest {
+  const deviceSource: TradeDeviceSource = params?.deviceSource ?? 'WXAPP'
+  const renderOrderSource =
+    params?.orderSource ??
+    (typeof render.extra?.orderSource === 'string' ? String(render.extra.orderSource) : undefined) ??
+    'product.detail.page'
+
+  const addressId = pickRenderAddressId(render)
+  if (typeof addressId !== 'number') {
+    throw new Error('render-order 未返回可用的 addressId')
+  }
+
+  const orderList = Array.isArray(render.orderList) ? render.orderList : null
+  if (!orderList) throw new Error('render-order 未返回 orderList')
+
+  const priceInfo = render.priceInfo
+  if (!priceInfo || typeof priceInfo !== 'object') throw new Error('render-order 未返回 priceInfo')
+
+  const totalFee = pickRenderTotalFee(render)
+  if (typeof totalFee !== 'number') throw new Error('render-order 未返回 totalFee')
+
+  const extra = { ...(render.extra ?? {}), deviceSource }
+  const itemName = pickRenderSkuName(render)
+
+  const payload: any = {
+    ...render,
+    deviceSource,
+    orderSource: renderOrderSource,
+    buyConfig: params?.buyConfig ?? { lineGrouped: true, multipleCoupon: true },
+    itemName,
+    addressId,
+    orderList,
+    priceInfo,
+    totalFee,
+    extra,
+    devicesId: (render as any).devicesId ?? (typeof render.extra?.devicesId === 'string' ? render.extra.devicesId : undefined),
+  }
+  if (payload.shipFeeInfo == null && render.shipFee != null) payload.shipFeeInfo = render.shipFee
+
+  return payload as TradeCreateOrderRequest
+}
+
 export interface TradeCreateOrderCouponParam {
   activityId: number
   benefitId?: number | null
