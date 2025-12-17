@@ -229,7 +229,7 @@ onMounted(() => {
             @node-click="onTreeNodeClick"
           />
           <div v-if="!categoriesLoading && categories.length === 0" style="padding: 8px 0; color: #909399">
-            还没有分类数据：先选择地址，再点击“加载分类”。
+            还没有分类数据：请先选择地址，系统会自动加载分类。
           </div>
         </el-card>
       </el-col>
@@ -268,8 +268,8 @@ onMounted(() => {
                 <span v-else style="color: #c0c4cc">-</span>
               </template>
             </el-table-column>
-            <el-table-column prop="title" label="名称" min-width="260" show-overflow-tooltip />
-            <el-table-column prop="id" label="SKU" width="140" show-overflow-tooltip />
+            <el-table-column prop="title" label="名称" min-width="200" show-overflow-tooltip />
+            <el-table-column prop="id" label="商品ID" width="190" show-overflow-tooltip />
             <el-table-column label="分类" min-width="140" show-overflow-tooltip>
               <template #default="{ row }">
                 <span>{{ row.categoryName || '-' }}</span>

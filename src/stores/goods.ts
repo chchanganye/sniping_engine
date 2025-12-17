@@ -64,7 +64,7 @@ function normalizeSkuGroup(raw: any): StoreSkuCategoryGroup {
 
 function skuToGoodsItem(sku: StoreSkuModel, group?: StoreSkuCategoryGroup): GoodsItem {
   return {
-    id: normalizeText(sku.skuId || sku.itemId || sku.id),
+    id: normalizeText(sku.itemId || sku.skuId || sku.id),
     title: sku.name,
     price: sku.price ?? undefined,
     stock: sku.inStock ?? undefined,
@@ -98,7 +98,6 @@ export const useGoodsStore = defineStore('goods', {
     selectedCategoryId: undefined as number | undefined,
 
     goodsLoading: false,
-    activeFrontCategoryId: undefined as number | undefined,
     skuGroups: [] as StoreSkuCategoryGroup[],
     selectedGroupId: undefined as number | undefined,
     goods: [] as GoodsItem[],
@@ -180,7 +179,6 @@ export const useGoodsStore = defineStore('goods', {
       if (!Number.isFinite(cid)) throw new Error('分类ID不正确')
 
       this.goodsLoading = true
-      this.activeFrontCategoryId = cid
       const logs = useLogsStore()
       try {
         const groups = await apiSearchStoreSkuByCategory({
@@ -198,9 +196,6 @@ export const useGoodsStore = defineStore('goods', {
         const groupExists = typeof this.selectedGroupId === 'number' &&
           normalizedGroups.some((g) => g.categoryId === this.selectedGroupId)
         if (!groupExists) this.selectedGroupId = undefined
-
-        const stillExists = this.selectedGoodsId && this.goods.some((g) => g.id === this.selectedGoodsId)
-        if (!stillExists) this.selectedGoodsId = undefined
       } catch (e) {
         const message = e instanceof Error ? e.message : '获取分类商品失败'
         logs.addLog({ level: 'error', message: `获取分类商品失败：${message}` })
