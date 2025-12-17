@@ -13,10 +13,13 @@ const goodsStore = useGoodsStore()
 const tasksStore = useTasksStore()
 
 const { accounts } = storeToRefs(accountsStore)
-const { goods, selectedGoodsId } = storeToRefs(goodsStore)
+const { goods, selectedGoodsId, targetGoods } = storeToRefs(goodsStore)
 const { tasks } = storeToRefs(tasksStore)
 
-const goodsOptions = computed(() => goods.value.map((g) => ({ label: g.title, value: g.id })))
+const goodsOptions = computed(() => {
+  const list = targetGoods.value.length > 0 ? targetGoods.value : goods.value
+  return list.map((g) => ({ label: g.title, value: g.id }))
+})
 const accountOptions = computed(() =>
   accounts.value.map((a) => ({ label: `${a.nickname}（${a.username}）`, value: a.id })),
 )
@@ -38,7 +41,7 @@ function formatTime(value?: string) {
 }
 
 function resolveGoodsTitle(id: string) {
-  return goods.value.find((g) => g.id === id)?.title ?? id
+  return targetGoods.value.find((g) => g.id === id)?.title ?? goods.value.find((g) => g.id === id)?.title ?? id
 }
 
 function create(startNow: boolean) {
@@ -63,7 +66,7 @@ function create(startNow: boolean) {
 
 function startTask(id: string) {
   tasksStore.startTask(id)
-  ElMessage.success('已启动任务（mock）')
+  ElMessage.success('已启动任务')
 }
 
 function stopTask(id: string) {
@@ -89,7 +92,7 @@ async function removeTask(id: string) {
                 <el-option v-for="opt in goodsOptions" :key="opt.value" :label="opt.label" :value="opt.value" />
               </el-select>
               <div style="margin-top: 6px; color: #909399">
-                提示：可先到「商品列表」设置目标商品，再回来创建任务。
+                提示：可先到「商品列表」把商品加入「目标清单」，再回来创建任务。
               </div>
             </el-form-item>
             <el-form-item label="账号">

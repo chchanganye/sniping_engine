@@ -82,6 +82,10 @@ export interface StoreSkuModel {
   skuId: number
   itemId: number
   storeId?: number
+  sellerId?: number
+  categoryId?: number | null
+  skuCode?: string | null
+  fullUnit?: string | null
   name: string
   mainImage?: string | null
   price?: number | null

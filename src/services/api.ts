@@ -207,6 +207,275 @@ export async function apiSearchStoreSkuByCategory(params: {
   }
 }
 
+export type TradeDeviceSource = 'H5' | 'WXAPP' | string
+
+export interface TradeCreateOrderCouponParam {
+  activityId: number
+  benefitId?: number | null
+  shopId: number
+  [key: string]: unknown
+}
+
+export interface TradeCreateOrderBenefitParam {
+  activityId: number
+  benefitId?: number | null
+  shopId: number
+  benefitType?: unknown
+  amount?: unknown
+  [key: string]: unknown
+}
+
+export interface TradeCreateOrderLineSkuAttr {
+  attrKey: string
+  attrVal: string
+}
+
+export interface TradeCreateOrderLine {
+  itemId: number
+  skuId: number
+  skuCode?: string | null
+  bundleId?: number | string | null
+  quantity: number
+  activityId?: number | string | null
+  shopActivityId?: number | string | null
+  extraParam?: unknown
+  promotionTag?: unknown
+  shopId: number
+  lineId?: string
+  categoryId?: number | null
+  skuName?: string | null
+  attrs?: TradeCreateOrderLineSkuAttr[] | null
+  mainImage?: string | null
+  outerSkuCode?: string | null
+  status?: number | null
+  salePrice?: number | null
+  preferSalePrice?: number | null
+  extra?: Record<string, unknown> | null
+  summary?: Record<string, unknown> | null
+  bizCode?: string | null
+  itemAttributes?: Record<string, unknown> | null
+  [key: string]: unknown
+}
+
+export interface TradeCreateOrderRequest {
+  deviceSource: TradeDeviceSource
+  orderSource?: string
+  buyConfig?: Record<string, unknown>
+  memberPointsDeductionInfo?: Record<string, unknown>
+  itemName?: string | null
+  mobile?: string | null
+  invoice?: unknown
+  addressId: number
+  couponParams?: TradeCreateOrderCouponParam[]
+  benefitParams?: TradeCreateOrderBenefitParam[]
+  orderList: unknown[]
+  extraParam?: unknown
+  extra?: Record<string, unknown>
+  delivery?: Record<string, unknown>
+  [key: string]: unknown
+}
+
+export interface TradeCreateOrderResponseData {
+  purchaseOrderId?: number
+  orderInfos?: Array<{
+    orderId: number
+    orderLineInfos?: Array<{
+      orderLineId: number
+      skuId: number
+      quantity: number
+    }>
+  }>
+  buyerId?: number
+  orderLineList?: unknown[]
+  extra?: Record<string, unknown>
+  [key: string]: unknown
+}
+
+export async function apiTradeCreateOrder(
+  token: string,
+  payload: TradeCreateOrderRequest,
+  options?: { signal?: AbortSignal },
+): Promise<TradeCreateOrderResponseData> {
+  if (!token) throw new Error('缺少 token')
+  try {
+    const resp = await http.post<ApiEnvelope<TradeCreateOrderResponseData>>('/api/trade/buy/create-order', payload, {
+      headers: {
+        Authorization: `Bearer ${token}`,
+        token,
+        'x-token': token,
+      },
+      signal: options?.signal,
+    })
+    if ((resp.data as any)?.error) throw new Error(String((resp.data as any).error))
+    if (!resp.data?.success) throw new Error(resp.data?.message || '创建订单失败')
+    return resp.data.data
+  } catch (e) {
+    throw new Error(extractApiErrorMessage(e, '创建订单失败'))
+  }
+}
+
+export interface BuildTradeCreateOrderSkuParams {
+  itemId: number
+  skuId: number
+  shopId: number
+  skuCode?: string | null
+  categoryId?: number | null
+  skuName?: string | null
+  mainImage?: string | null
+  salePrice?: number | null
+  fullUnit?: string | null
+  itemAttributes?: Record<string, unknown> | null
+}
+
+export interface BuildTradeCreateOrderPayloadParams {
+  addressId: number
+  quantity: number
+  sku: BuildTradeCreateOrderSkuParams
+  deviceSource?: TradeDeviceSource
+  orderSource?: string
+  devicesId?: string
+  settleAccountId?: string
+  settleAccountName?: string
+  channelName?: string
+  channelCode?: string
+  operatorType?: string
+  paymentMethod?: string
+}
+
+export function buildTradeCreateOrderPayload(params: BuildTradeCreateOrderPayloadParams): TradeCreateOrderRequest {
+  const deviceSource: TradeDeviceSource = params.deviceSource ?? 'WXAPP'
+  const orderSource = params.orderSource ?? 'product.detail.page'
+  const itemId = Number(params.sku.itemId)
+  const skuId = Number(params.sku.skuId)
+  const shopId = Number(params.sku.shopId)
+
+  const skuName = params.sku.skuName ?? null
+  const mainImage = params.sku.mainImage ?? null
+  const skuCode = params.sku.skuCode ?? null
+  const categoryId = typeof params.sku.categoryId === 'number' ? params.sku.categoryId : null
+  const salePrice = typeof params.sku.salePrice === 'number' ? params.sku.salePrice : null
+
+  const fullUnit = (params.sku.fullUnit && String(params.sku.fullUnit)) || '个'
+  const devicesId = params.devicesId
+  const settleAccountId = params.settleAccountId ?? ''
+
+  return {
+    deviceSource,
+    orderSource,
+    buyConfig: { lineGrouped: true, multipleCoupon: true },
+    memberPointsDeductionInfo: {
+      available: false,
+      visible: false,
+      point: 0,
+      chosenIntegral: 0,
+      maxExchangeValue: 0,
+      minExchangeValue: 100,
+      exchangeUnit: 100,
+      deductAmount: 0,
+      exchangeRatio: 1,
+      displayRemark: null,
+      extra: null,
+      presentIntegral: 0,
+    },
+    itemName: skuName,
+    mobile: null,
+    invoice: null,
+    addressId: params.addressId,
+    couponParams: [
+      { activityId: -1, benefitId: null, shopId: 0 },
+      { activityId: -1, benefitId: null, shopId },
+    ],
+    benefitParams: [
+      { activityId: -1, benefitId: null, shopId: 0, benefitType: null, amount: null },
+    ],
+    orderList: [
+      {
+        activityOrderList: [
+          {
+            activityMatchedLine: {
+              activity: null,
+              valid: false,
+              benefitId: null,
+              benefitUsageInfo: null,
+              display: null,
+              matchedLineIds: null,
+              errorMsg: null,
+            },
+            activityExist: false,
+            orderLineList: null,
+            orderLineGroups: [
+              {
+                orderLineList: [
+                  {
+                    itemId,
+                    skuId,
+                    skuCode,
+                    bundleId: null,
+                    quantity: params.quantity,
+                    activityId: null,
+                    shopActivityId: null,
+                    extraParam: null,
+                    promotionTag: null,
+                    shopId,
+                    lineId: `${itemId}_${shopId}`,
+                    categoryId,
+                    skuName,
+                    attrs: fullUnit ? [{ attrKey: '规格', attrVal: fullUnit }] : [],
+                    mainImage,
+                    outerSkuCode: null,
+                    status: 1,
+                    salePrice,
+                    preferSalePrice: salePrice,
+                    extra: {
+                      devicesId,
+                      fullUnit,
+                      itemType: '1',
+                      shopType: null,
+                      deliveryTimeType: null,
+                      businessCode: 'express',
+                      businessName: '快递',
+                      businessType: '1',
+                      unitQuantity: '1',
+                    },
+                    summary: null,
+                    bizCode: 'express',
+                    itemAttributes: params.sku.itemAttributes ?? null,
+                  } satisfies TradeCreateOrderLine,
+                ],
+              },
+            ],
+          },
+        ],
+        shop: { id: shopId },
+        buyerNote: null,
+        extraParam: null,
+      },
+    ],
+    extraParam: { cartLineIds: null },
+    extra: {
+      orderSource,
+      settleAccountName: params.settleAccountName ?? '上海光明随心订电子商务有限公司',
+      settleAccountId,
+      advisorText:
+        '光明健康顾问编号为7-8位数\\n光明健康顾问编号由字母及数字组成\\n光明健康顾问编号内字母为大写字母',
+      customerName: null,
+      renewOriginAddressId: '',
+      devicesId,
+      deviceSource,
+      customerId: null,
+      renewOriginOrderId: '',
+      paymentMethod: params.paymentMethod ?? '0',
+      channelName: params.channelName ?? '随心订',
+      operatorType: params.operatorType ?? '1',
+      activityGroupId: null,
+      channelCode: params.channelCode ?? 'SXD',
+      presentIntegralIsVisible: '1',
+      captchaVerifyParam: null,
+    },
+    delivery: { code: 'express', deliveryTimeParam: {} },
+  }
+}
+
 export interface LoginParams {
   username: string
   password: string
