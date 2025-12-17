@@ -1,12 +1,13 @@
 <script setup lang="ts">
-import { computed, onMounted, watch } from 'vue'
+import { computed, onMounted } from 'vue'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import { storeToRefs } from 'pinia'
+import { Delete, Refresh } from '@element-plus/icons-vue'
 import StatusTag from '@/components/StatusTag.vue'
 import { useAccountsStore } from '@/stores/accounts'
 import { useGoodsStore } from '@/stores/goods'
 import { useTasksStore } from '@/stores/tasks'
-import type { TaskMode } from '@/types/core'
+import type { TaskMode, Task } from '@/types/core'
 
 const accountsStore = useAccountsStore()
 const goodsStore = useGoodsStore()
@@ -14,10 +15,12 @@ const tasksStore = useTasksStore()
 
 const { accounts } = storeToRefs(accountsStore)
 const { targetGoods } = storeToRefs(goodsStore)
-const { tasks } = storeToRefs(tasksStore)
+const { tasks, engineRunning, engineLoading, loading } = storeToRefs(tasksStore)
 
-const loggedInAccounts = computed(() => accounts.value.filter((a) => Boolean(a.token)))
-const loggedInCount = computed(() => loggedInAccounts.value.length)
+onMounted(() => {
+  void accountsStore.ensureLoaded()
+  void tasksStore.refresh().catch(() => null)
+})
 
 const goodsMap = computed(() => {
   const map = new Map<string, any>()
@@ -30,62 +33,63 @@ const modeOptions: Array<{ label: string; value: TaskMode }> = [
   { label: '扫货', value: 'scan' },
 ]
 
-function sync() {
-  tasksStore.syncFromTargetGoods()
-}
+const enabledCount = computed(() => tasks.value.filter((t) => t.enabled).length)
 
-function start(goodsId: string) {
-  if (loggedInCount.value === 0) {
-    ElMessage.warning('请先在「账号管理」登录账号')
+async function importTargets() {
+  if (targetGoods.value.length === 0) {
+    ElMessage.warning('请先在“商品列表”把商品加入目标清单')
     return
   }
-  tasksStore.startTask(goodsId)
+  await tasksStore.importFromGoodsSelection()
+  ElMessage.success('已导入/同步')
+}
+
+async function start() {
+  if (accounts.value.length === 0) {
+    ElMessage.warning('请先添加账号（后端要求至少 1 个账号）')
+    return
+  }
+  if (enabledCount.value === 0) {
+    ElMessage.warning('请先启用至少 1 个目标任务')
+    return
+  }
+  await tasksStore.startEngine()
   ElMessage.success('已启动')
 }
 
-function stop(goodsId: string) {
-  tasksStore.stopTask(goodsId)
+async function stop() {
+  await tasksStore.stopEngine()
   ElMessage.warning('已停止')
 }
 
-function startAll() {
-  if (loggedInCount.value === 0) {
-    ElMessage.warning('请先在「账号管理」登录账号')
-    return
-  }
-  tasksStore.startAll()
-  ElMessage.success('已启动全部任务')
+async function remove(row: Task) {
+  await ElMessageBox.confirm(`确认删除目标任务：${row.goodsTitle}？`, '提示', { type: 'warning' }).catch(() => null)
+  await tasksStore.removeTask(row.id)
+  ElMessage.success('已删除')
 }
 
-function stopAll() {
-  tasksStore.stopAll()
-  ElMessage.warning('已停止全部任务')
+function onRushAtChange(row: Task, value: Date | null) {
+  const ms = value instanceof Date ? value.getTime() : undefined
+  row.rushAtMs = ms
+  void tasksStore.updateTask(row.id, { rushAtMs: ms })
 }
-
-async function removeFromTargetList(goodsId: string) {
-  await ElMessageBox.confirm('确认从目标清单移除该商品？', '提示', { type: 'warning' }).catch(() => null)
-  goodsStore.removeTargetGoods(goodsId)
-  ElMessage.success('已移除')
-}
-
-onMounted(() => {
-  sync()
-})
-
-watch(targetGoods, () => sync(), { deep: false })
 </script>
 
 <template>
   <div class="page">
-    <el-card shadow="never" header="抢购工作台">
-      <div style="display: flex; align-items: center; justify-content: space-between; gap: 12px; flex-wrap: wrap">
+    <el-card shadow="never" header="抢购工作台（后端执行）">
+      <div class="toolbar">
         <div style="color: #606266">
-          已登录账号：<b>{{ loggedInCount }}</b>（启动后会轮流对目标商品执行：render-order 校验 → create-order 下单）
+          当前目标任务：<b>{{ tasks.length }}</b>，启用：<b>{{ enabledCount }}</b>，引擎状态：
+          <el-tag :type="engineRunning ? 'success' : 'info'" size="small" effect="light">
+            {{ engineRunning ? '运行中' : '未运行' }}
+          </el-tag>
         </div>
         <el-space :size="8" wrap>
-          <el-button @click="sync">同步目标清单</el-button>
-          <el-button type="success" @click="startAll" :disabled="tasks.length === 0">全部开始</el-button>
-          <el-button type="warning" @click="stopAll" :disabled="tasks.length === 0">全部停止</el-button>
+          <el-button :loading="loading" :icon="Refresh" @click="tasksStore.refresh()">刷新</el-button>
+          <el-button type="primary" @click="importTargets">从商品目标清单导入</el-button>
+          <el-button type="success" :disabled="engineRunning" :loading="engineLoading" @click="start">开始执行</el-button>
+          <el-button type="warning" :disabled="!engineRunning" :loading="engineLoading" @click="stop">停止执行</el-button>
         </el-space>
       </div>
 
@@ -96,8 +100,8 @@ watch(targetGoods, () => sync(), { deep: false })
           <template #default="{ row }">
             <div style="display: flex; align-items: center; gap: 10px; min-width: 0">
               <el-image
-                v-if="goodsMap.get(row.goodsId)?.imageUrl"
-                :src="goodsMap.get(row.goodsId)?.imageUrl"
+                v-if="goodsMap.get(String(row.itemId))?.imageUrl"
+                :src="goodsMap.get(String(row.itemId))?.imageUrl"
                 fit="cover"
                 style="width: 44px; height: 44px; border-radius: 6px; flex: 0 0 auto"
               />
@@ -106,10 +110,20 @@ watch(targetGoods, () => sync(), { deep: false })
                   {{ row.goodsTitle }}
                 </div>
                 <div style="color: #909399; font-size: 12px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap">
-                  {{ row.goodsId }}
+                  itemId={{ row.itemId }} / skuId={{ row.skuId }} / shopId={{ row.shopId ?? '-' }}
                 </div>
               </div>
             </div>
+          </template>
+        </el-table-column>
+
+        <el-table-column label="启用" width="90">
+          <template #default="{ row }">
+            <el-switch
+              v-model="row.enabled"
+              :disabled="engineRunning"
+              @change="() => tasksStore.updateTask(row.id, { enabled: row.enabled })"
+            />
           </template>
         </el-table-column>
 
@@ -119,43 +133,59 @@ watch(targetGoods, () => sync(), { deep: false })
               v-model="row.mode"
               size="small"
               style="width: 100%"
-              :disabled="row.status === 'running' || row.status === 'scheduled'"
+              :disabled="engineRunning"
+              @change="() => tasksStore.updateTask(row.id, { mode: row.mode })"
             >
               <el-option v-for="opt in modeOptions" :key="opt.value" :label="opt.label" :value="opt.value" />
             </el-select>
           </template>
         </el-table-column>
 
-        <el-table-column label="开始时间" width="220">
+        <el-table-column label="抢购时间" width="220">
           <template #default="{ row }">
             <el-date-picker
-              v-model="row.scheduleAt"
+              v-if="row.mode === 'rush'"
+              :model-value="row.rushAtMs ? new Date(row.rushAtMs) : null"
               type="datetime"
-              placeholder="不填则立即开始"
-              value-format="YYYY-MM-DDTHH:mm:ss.SSSZ"
+              placeholder="不填则立即"
               size="small"
               style="width: 100%"
-              :disabled="row.status === 'running' || row.status === 'scheduled'"
+              :disabled="engineRunning"
+              @update:model-value="(v: Date | null) => onRushAtChange(row, v)"
             />
+            <span v-else style="color: #c0c4cc">-</span>
           </template>
         </el-table-column>
 
         <el-table-column label="目标数量" width="120">
           <template #default="{ row }">
             <el-input-number
-              v-model="row.quantity"
+              v-model="row.targetQty"
+              :min="1"
+              :max="9999"
+              size="small"
+              :disabled="engineRunning"
+              @change="() => tasksStore.updateTask(row.id, { targetQty: row.targetQty })"
+            />
+          </template>
+        </el-table-column>
+
+        <el-table-column label="单次数量" width="120">
+          <template #default="{ row }">
+            <el-input-number
+              v-model="row.perOrderQty"
               :min="1"
               :max="999"
               size="small"
-              :disabled="row.status === 'running' || row.status === 'scheduled'"
+              :disabled="engineRunning"
+              @change="() => tasksStore.updateTask(row.id, { perOrderQty: row.perOrderQty })"
             />
           </template>
         </el-table-column>
 
         <el-table-column label="进度" width="120">
           <template #default="{ row }">
-            <div>{{ row.successCount }}/{{ row.quantity }}</div>
-            <div style="color: #909399; font-size: 12px">失败 {{ row.failCount }}</div>
+            <div>{{ row.purchasedQty }}/{{ row.targetQty }}</div>
           </template>
         </el-table-column>
 
@@ -165,40 +195,41 @@ watch(targetGoods, () => sync(), { deep: false })
           </template>
         </el-table-column>
 
-        <el-table-column label="最新信息" min-width="220" show-overflow-tooltip>
+        <el-table-column label="最新错误" min-width="220" show-overflow-tooltip>
           <template #default="{ row }">
-            <span>{{ row.lastMessage || '-' }}</span>
+            <span>{{ row.lastError || '-' }}</span>
           </template>
         </el-table-column>
 
-        <el-table-column label="操作" width="240">
+        <el-table-column label="操作" width="120">
           <template #default="{ row }">
-            <el-space :size="8" wrap>
-              <el-button
-                size="small"
-                type="success"
-                @click="start(row.goodsId)"
-                :disabled="row.status === 'running' || row.status === 'scheduled'"
-              >
-                开始
-              </el-button>
-              <el-button
-                size="small"
-                type="warning"
-                @click="stop(row.goodsId)"
-                :disabled="row.status !== 'running' && row.status !== 'scheduled'"
-              >
-                停止
-              </el-button>
-              <el-button size="small" type="danger" plain @click="removeFromTargetList(row.goodsId)">移出清单</el-button>
-            </el-space>
+            <el-button
+              size="small"
+              type="danger"
+              plain
+              :icon="Delete"
+              :disabled="engineRunning"
+              @click="remove(row)"
+            >
+              删除
+            </el-button>
           </template>
         </el-table-column>
       </el-table>
 
       <div v-if="tasks.length === 0" style="padding: 8px 0; color: #909399">
-        暂无目标商品：请先到「商品列表」把商品加入「目标清单」。
+        暂无目标任务：可在“商品列表”加入目标清单后，点击“从商品目标清单导入”。
       </div>
     </el-card>
   </div>
 </template>
+
+<style scoped>
+.toolbar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  flex-wrap: wrap;
+}
+</style>

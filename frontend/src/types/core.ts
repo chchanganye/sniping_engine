@@ -2,18 +2,15 @@ export type AccountStatus = 'idle' | 'logging_in' | 'logged_in' | 'running' | 'e
 
 export interface Account {
   id: string
-  nickname: string
-  username: string
-  password?: string
+  mobile: string
   token?: string
-  userId?: number
-  auth?: unknown
-  profile?: CurrentUser
+  userAgent?: string
   deviceId?: string
   uuid?: string
+  proxy?: string
   status: AccountStatus
-  lastActiveAt?: string
-  remark?: string
+  createdAt?: string
+  updatedAt?: string
 }
 
 export interface CurrentUser {
@@ -133,16 +130,22 @@ export type TaskStatus = 'idle' | 'scheduled' | 'running' | 'success' | 'failed'
 
 export interface Task {
   id: string
-  goodsId: string
   goodsTitle: string
   mode: TaskMode
-  quantity: number
-  scheduleAt?: string
+  itemId: number
+  skuId: number
+  shopId?: number
+  targetQty: number
+  perOrderQty: number
+  rushAtMs?: number
+  enabled: boolean
   status: TaskStatus
-  createdAt: string
-  lastMessage?: string
-  successCount: number
-  failCount: number
+  purchasedQty: number
+  lastError?: string
+  lastAttemptMs?: number
+  lastSuccessMs?: number
+  createdAt?: string
+  updatedAt?: string
 }
 
 export type LogLevel = 'info' | 'success' | 'warning' | 'error'

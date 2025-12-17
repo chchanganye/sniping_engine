@@ -1,0 +1,156 @@
+package config
+
+import (
+	"errors"
+	"os"
+	"time"
+
+	"gopkg.in/yaml.v3"
+)
+
+type Config struct {
+	Server   ServerConfig   `yaml:"server"`
+	Storage  StorageConfig  `yaml:"storage"`
+	Proxy    ProxyConfig    `yaml:"proxy"`
+	Limits   LimitsConfig   `yaml:"limits"`
+	Task     TaskConfig     `yaml:"task"`
+	Provider ProviderConfig `yaml:"provider"`
+}
+
+type ServerConfig struct {
+	Addr string     `yaml:"addr"`
+	Cors CorsConfig `yaml:"cors"`
+}
+
+type CorsConfig struct {
+	AllowOrigins     []string `yaml:"allowOrigins"`
+	AllowCredentials bool     `yaml:"allowCredentials"`
+}
+
+type StorageConfig struct {
+	SQLitePath string `yaml:"sqlitePath"`
+}
+
+type ProxyConfig struct {
+	Global string `yaml:"global"`
+}
+
+type LimitsConfig struct {
+	GlobalQPS       float64 `yaml:"globalQPS"`
+	GlobalBurst     int     `yaml:"globalBurst"`
+	PerAccountQPS   float64 `yaml:"perAccountQPS"`
+	PerAccountBurst int     `yaml:"perAccountBurst"`
+	MaxInFlight     int     `yaml:"maxInFlight"`
+}
+
+type TaskConfig struct {
+	RushIntervalMs int `yaml:"rushIntervalMs"`
+	ScanIntervalMs int `yaml:"scanIntervalMs"`
+}
+
+func (c TaskConfig) RushInterval() time.Duration {
+	if c.RushIntervalMs <= 0 {
+		return 200 * time.Millisecond
+	}
+	return time.Duration(c.RushIntervalMs) * time.Millisecond
+}
+
+func (c TaskConfig) ScanInterval() time.Duration {
+	if c.ScanIntervalMs <= 0 {
+		return 1 * time.Second
+	}
+	return time.Duration(c.ScanIntervalMs) * time.Millisecond
+}
+
+type ProviderConfig struct {
+	BaseURL    string           `yaml:"baseURL"`
+	TimeoutMs  int              `yaml:"timeoutMs"`
+	Retry      ProviderRetryCfg `yaml:"retry"`
+	UserAgent  string           `yaml:"userAgent"`
+	DeviceID   string           `yaml:"deviceId"`
+	DeviceType string           `yaml:"deviceType"`
+}
+
+type ProviderRetryCfg struct {
+	Count     int `yaml:"count"`
+	WaitMs    int `yaml:"waitMs"`
+	MaxWaitMs int `yaml:"maxWaitMs"`
+}
+
+func (c ProviderConfig) Timeout() time.Duration {
+	if c.TimeoutMs <= 0 {
+		return 20 * time.Second
+	}
+	return time.Duration(c.TimeoutMs) * time.Millisecond
+}
+
+func (c ProviderRetryCfg) Wait() time.Duration {
+	if c.WaitMs <= 0 {
+		return 200 * time.Millisecond
+	}
+	return time.Duration(c.WaitMs) * time.Millisecond
+}
+
+func (c ProviderRetryCfg) MaxWait() time.Duration {
+	if c.MaxWaitMs <= 0 {
+		return 1200 * time.Millisecond
+	}
+	return time.Duration(c.MaxWaitMs) * time.Millisecond
+}
+
+func Load(path string) (Config, error) {
+	b, err := os.ReadFile(path)
+	if err != nil {
+		return Config{}, err
+	}
+	var cfg Config
+	if err := yaml.Unmarshal(b, &cfg); err != nil {
+		return Config{}, err
+	}
+	cfg.applyDefaults()
+	if err := cfg.validate(); err != nil {
+		return Config{}, err
+	}
+	return cfg, nil
+}
+
+func (c *Config) applyDefaults() {
+	if c.Server.Addr == "" {
+		c.Server.Addr = ":8090"
+	}
+	if c.Storage.SQLitePath == "" {
+		c.Storage.SQLitePath = "./data/sniping_engine.db"
+	}
+	if c.Limits.GlobalBurst <= 0 {
+		c.Limits.GlobalBurst = 10
+	}
+	if c.Limits.PerAccountBurst <= 0 {
+		c.Limits.PerAccountBurst = 2
+	}
+	if c.Limits.MaxInFlight <= 0 {
+		c.Limits.MaxInFlight = 20
+	}
+	if c.Provider.BaseURL == "" {
+		c.Provider.BaseURL = "http://127.0.0.1:8080/mock"
+	}
+	if c.Provider.UserAgent == "" {
+		c.Provider.UserAgent = "sniping_engine/standard-provider"
+	}
+	if c.Provider.DeviceType == "" {
+		c.Provider.DeviceType = "WXAPP"
+	}
+	if c.Provider.Retry.Count < 0 {
+		c.Provider.Retry.Count = 0
+	}
+}
+
+func (c Config) validate() error {
+	if c.Server.Addr == "" {
+		return errors.New("server.addr is required")
+	}
+	if c.Provider.BaseURL == "" {
+		return errors.New("provider.baseURL is required")
+	}
+	return nil
+}
+

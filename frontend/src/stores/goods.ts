@@ -1,7 +1,6 @@
 import { defineStore } from 'pinia'
 import type { GoodsItem, ShippingAddress, ShopCategoryNode, StoreSkuCategoryGroup, StoreSkuModel } from '@/types/core'
-import { apiFetchShopCategoryTree, apiListShippingAddresses, apiSearchStoreSkuByCategory } from '@/services/api'
-import { useLogsStore } from '@/stores/logs'
+import { apiFetchShopCategoryTree, apiListShippingAddresses, apiSearchStoreSkuByCategory } from '@/services/target'
 
 const ROOT_FRONT_CATEGORY_ID = 4403
 
@@ -164,7 +163,6 @@ export const useGoodsStore = defineStore('goods', {
     },
     async loadAddresses(token: string) {
       this.addressesLoading = true
-      const logs = useLogsStore()
       try {
         const list = await apiListShippingAddresses(token, { app: 'o2o', isAllCover: 1 })
         this.addresses = Array.isArray(list) ? list : []
@@ -177,10 +175,6 @@ export const useGoodsStore = defineStore('goods', {
 
         const defaultAddress = this.addresses.find((a) => a.isDefault) ?? this.addresses[0]
         this.setSelectedAddressId(defaultAddress?.id)
-      } catch (e) {
-        const message = e instanceof Error ? e.message : '获取收货地址失败'
-        logs.addLog({ level: 'error', message: `获取收货地址失败：${message}` })
-        throw e
       } finally {
         this.addressesLoading = false
       }
@@ -188,7 +182,6 @@ export const useGoodsStore = defineStore('goods', {
     async loadCategories() {
       if (!this.locationReady) throw new Error('缺少经纬度，请先选择收货地址')
       this.categoriesLoading = true
-      const logs = useLogsStore()
       try {
         const data = await apiFetchShopCategoryTree({
           frontCategoryId: ROOT_FRONT_CATEGORY_ID,
@@ -199,14 +192,8 @@ export const useGoodsStore = defineStore('goods', {
         const normalized = Array.isArray(data) ? data.map(normalizeCategoryNode) : []
         this.categories = normalized
 
-        const exists =
-          typeof this.selectedCategoryId === 'number' &&
-          treeHasCategoryId(normalized, this.selectedCategoryId)
+        const exists = typeof this.selectedCategoryId === 'number' && treeHasCategoryId(normalized, this.selectedCategoryId)
         if (!exists) this.selectedCategoryId = undefined
-      } catch (e) {
-        const message = e instanceof Error ? e.message : '获取分类失败'
-        logs.addLog({ level: 'error', message: `获取分类失败：${message}` })
-        throw e
       } finally {
         this.categoriesLoading = false
       }
@@ -217,7 +204,6 @@ export const useGoodsStore = defineStore('goods', {
       if (!Number.isFinite(cid)) throw new Error('分类ID不正确')
 
       this.goodsLoading = true
-      const logs = useLogsStore()
       try {
         const groups = await apiSearchStoreSkuByCategory({
           pageNo,
@@ -231,16 +217,12 @@ export const useGoodsStore = defineStore('goods', {
         this.skuGroups = normalizedGroups
         this.goods = normalizedGroups.flatMap((g) => g.storeSkuModelList.map((sku) => skuToGoodsItem(sku, g)))
 
-        const groupExists = typeof this.selectedGroupId === 'number' &&
-          normalizedGroups.some((g) => g.categoryId === this.selectedGroupId)
+        const groupExists = typeof this.selectedGroupId === 'number' && normalizedGroups.some((g) => g.categoryId === this.selectedGroupId)
         if (!groupExists) this.selectedGroupId = undefined
-      } catch (e) {
-        const message = e instanceof Error ? e.message : '获取分类商品失败'
-        logs.addLog({ level: 'error', message: `获取分类商品失败：${message}` })
-        throw e
       } finally {
         this.goodsLoading = false
       }
     },
   },
 })
+

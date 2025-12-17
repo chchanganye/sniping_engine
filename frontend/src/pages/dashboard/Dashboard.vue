@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed } from 'vue'
+import { computed, onMounted } from 'vue'
 import { storeToRefs } from 'pinia'
 import dayjs from 'dayjs'
 import { useRouter } from 'vue-router'
@@ -16,8 +16,14 @@ const tasksStore = useTasksStore()
 const logsStore = useLogsStore()
 
 const { accounts, summary: accountSummary } = storeToRefs(accountsStore)
-const { tasks, summary: taskSummary } = storeToRefs(tasksStore)
+const { tasks, summary: taskSummary, engineRunning } = storeToRefs(tasksStore)
 const { logs } = storeToRefs(logsStore)
+
+onMounted(() => {
+  void accountsStore.ensureLoaded()
+  void tasksStore.ensureLoaded()
+  logsStore.connect()
+})
 
 const recentLogs = computed(() => logs.value.slice(0, 20))
 const recentTasks = computed(() => tasks.value.slice(0, 5))
@@ -26,16 +32,12 @@ function formatTime(value?: string) {
   if (!value) return '-'
   return dayjs(value).format('YYYY-MM-DD HH:mm:ss')
 }
-
-function goAccounts() {
-  void router.push('/accounts')
-}
 </script>
 
 <template>
   <div class="page">
     <el-alert
-      title="当前为 UI 框架/假数据演示：下一步会按目标站点 API 逐步对接登录、商品列表、下单。"
+      title="前端只负责配置与监控；任务执行由 Go 后端引擎负责。"
       type="info"
       :closable="false"
       show-icon
@@ -49,50 +51,50 @@ function goAccounts() {
       </el-col>
       <el-col :xs="12" :sm="6">
         <el-card shadow="never">
-          <el-statistic title="已登录" :value="accountSummary.loggedIn" />
+          <el-statistic title="已配置 Token" :value="accountSummary.loggedIn" />
         </el-card>
       </el-col>
       <el-col :xs="12" :sm="6">
         <el-card shadow="never">
-          <el-statistic title="运行中账号" :value="accountSummary.running" />
+          <el-statistic title="目标任务" :value="taskSummary.total" />
         </el-card>
       </el-col>
       <el-col :xs="12" :sm="6">
         <el-card shadow="never">
-          <el-statistic title="运行中任务" :value="taskSummary.running" />
+          <div style="display: flex; align-items: center; justify-content: space-between">
+            <div style="color: #909399; font-size: 12px">引擎状态</div>
+            <el-tag :type="engineRunning ? 'success' : 'info'" effect="light">
+              {{ engineRunning ? '运行中' : '未运行' }}
+            </el-tag>
+          </div>
+          <div style="margin-top: 8px; font-size: 22px; font-weight: 600">{{ taskSummary.running }}</div>
+          <div style="color: #909399; font-size: 12px">运行/排队中的任务数</div>
         </el-card>
       </el-col>
     </el-row>
 
     <el-row :gutter="12" style="margin-top: 12px">
       <el-col :xs="24" :lg="14">
-        <el-card shadow="never" header="账号运行情况">
+        <el-card shadow="never" header="账号概览">
+          <div style="margin-bottom: 10px">
+            <el-button size="small" @click="router.push('/accounts')">去配置账号</el-button>
+          </div>
           <el-table :data="accounts" size="small" style="width: 100%">
-            <el-table-column prop="nickname" label="昵称" min-width="120" />
-            <el-table-column prop="username" label="手机号" min-width="150" />
+            <el-table-column prop="mobile" label="手机号" min-width="160" />
             <el-table-column label="状态" width="110">
               <template #default="{ row }">
                 <StatusTag kind="account" :status="row.status" />
               </template>
             </el-table-column>
-            <el-table-column label="最近心跳" min-width="170">
+            <el-table-column label="Token" width="100">
               <template #default="{ row }">
-                <span>{{ formatTime(row.lastActiveAt) }}</span>
+                <el-tag :type="row.token ? 'success' : 'info'" size="small" effect="light">
+                  {{ row.token ? '已配置' : '未配置' }}
+                </el-tag>
               </template>
             </el-table-column>
-            <el-table-column label="操作" width="240">
-              <template #default="{ row }">
-                <el-space :size="8">
-                  <el-button size="small" @click="goAccounts" :disabled="row.status === 'logging_in'">
-                    登录
-                  </el-button>
-                  <el-button size="small" type="success" @click="accountsStore.start(row.id)">
-                    启动
-                  </el-button>
-                  <el-button size="small" type="warning" @click="accountsStore.stop(row.id)">停止</el-button>
-                </el-space>
-              </template>
-            </el-table-column>
+            <el-table-column prop="proxy" label="独立代理" min-width="200" show-overflow-tooltip />
+            <el-table-column prop="updatedAt" label="更新时间" width="200" show-overflow-tooltip />
           </el-table>
         </el-card>
       </el-col>
@@ -119,6 +121,9 @@ function goAccounts() {
     <el-row :gutter="12" style="margin-top: 12px">
       <el-col :xs="24">
         <el-card shadow="never" header="最近任务（Top 5）">
+          <div style="margin-bottom: 10px">
+            <el-button size="small" @click="router.push('/tasks')">去配置任务</el-button>
+          </div>
           <el-table :data="recentTasks" size="small" style="width: 100%">
             <el-table-column prop="goodsTitle" label="商品" min-width="220" show-overflow-tooltip />
             <el-table-column label="状态" width="110">
@@ -126,19 +131,18 @@ function goAccounts() {
                 <StatusTag kind="task" :status="row.status" />
               </template>
             </el-table-column>
-            <el-table-column label="进度" width="110">
-              <template #default="{ row }">{{ row.successCount }}/{{ row.quantity }}</template>
+            <el-table-column label="进度" width="120">
+              <template #default="{ row }">{{ row.purchasedQty }}/{{ row.targetQty }}</template>
             </el-table-column>
-            <el-table-column label="创建时间" width="170">
-              <template #default="{ row }">{{ formatTime(row.createdAt) }}</template>
-            </el-table-column>
-            <el-table-column prop="lastMessage" label="最新信息" min-width="200" show-overflow-tooltip />
+            <el-table-column prop="updatedAt" label="更新时间" width="170" show-overflow-tooltip />
+            <el-table-column prop="lastError" label="最新错误" min-width="220" show-overflow-tooltip />
           </el-table>
           <div v-if="recentTasks.length === 0" style="padding: 8px 0; color: #909399">
-            还没有任务，可到「抢购工作台」创建。
+            还没有任务：可到“抢购工作台”导入目标并配置任务。
           </div>
         </el-card>
       </el-col>
     </el-row>
   </div>
 </template>
+

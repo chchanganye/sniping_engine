@@ -12,6 +12,14 @@ dist
 dist-ssr
 *.local
 
+# Backend (Go)
+backend/data/
+backend/*.db
+backend/*.db-shm
+backend/*.db-wal
+backend/bin/
+backend/*.exe
+
 # Editor directories and files
 .vscode/*
 !.vscode/extensions.json

@@ -34,7 +34,7 @@ const targetListVisible = ref(false)
 const accountOptions = computed(() =>
   accounts.value
     .filter((a) => a.token)
-    .map((a) => ({ label: `${a.username}`, value: a.id })),
+    .map((a) => ({ label: `${a.mobile}`, value: a.id })),
 )
 
 const currentAccount = computed(() => accounts.value.find((a) => a.id === accountId.value) ?? null)
@@ -55,7 +55,7 @@ function addressLabel(a: ShippingAddress) {
 async function refreshAddresses() {
   const token = currentAccount.value?.token
   if (!token) {
-    ElMessage.warning('请先在「账号管理」登录账号')
+    ElMessage.warning('请先在「账号管理」配置 Token（或先完成后端登录）')
     return
   }
   try {
@@ -182,7 +182,8 @@ watch(
   { deep: false },
 )
 
-onMounted(() => {
+onMounted(async () => {
+  await accountsStore.ensureLoaded()
   if (accountOptions.value.length > 0 && !accountId.value) {
     const first = accountOptions.value[0]
     if (!first) return
@@ -224,7 +225,7 @@ onMounted(() => {
           </template>
 
           <div v-if="accountOptions.length === 0" style="color: #909399">
-            暂无已登录账号：请先到「账号管理」完成短信登录，再回来加载地址/分类/商品。
+            暂无可用账号：请先到「账号管理」添加账号并配置 Token（或先完成后端登录），再回来加载地址/分类/商品。
           </div>
         </el-card>
       </el-col>

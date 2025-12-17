@@ -1,28 +1,29 @@
 <script setup lang="ts">
-import { computed, ref } from 'vue'
+import { computed, onMounted, ref } from 'vue'
 import { useRoute } from 'vue-router'
-import {
-  Document,
-  Fold,
-  Goods,
-  Monitor,
-  Operation,
-  User,
-  Expand,
-} from '@element-plus/icons-vue'
+import { Document, Fold, Goods, Monitor, Operation, User, Expand } from '@element-plus/icons-vue'
 import { storeToRefs } from 'pinia'
 import { useAccountsStore } from '@/stores/accounts'
 import { useTasksStore } from '@/stores/tasks'
+import { useLogsStore } from '@/stores/logs'
 
 const isCollapsed = ref(false)
 const route = useRoute()
 
 const accountsStore = useAccountsStore()
 const tasksStore = useTasksStore()
-const { summary: accountSummary } = storeToRefs(accountsStore)
-const { summary: taskSummary } = storeToRefs(tasksStore)
+const logsStore = useLogsStore()
 
-const pageTitle = computed(() => route.meta.title ?? '抢购控制台')
+const { summary: accountSummary } = storeToRefs(accountsStore)
+const { summary: taskSummary, engineRunning } = storeToRefs(tasksStore)
+
+onMounted(() => {
+  void accountsStore.ensureLoaded()
+  void tasksStore.ensureLoaded()
+  logsStore.connect()
+})
+
+const pageTitle = computed(() => route.meta.title ?? '控制台')
 const activeMenu = computed(() => route.path)
 
 const menuItems = [
@@ -39,8 +40,8 @@ const menuItems = [
     <el-aside :width="isCollapsed ? '64px' : '240px'" class="shell-aside">
       <div class="brand">
         <div class="brand-title">
-          <span v-if="!isCollapsed">抢购控制台</span>
-          <span v-else>抢</span>
+          <span v-if="!isCollapsed">sniping_engine</span>
+          <span v-else>SE</span>
         </div>
         <el-button text class="brand-toggle" @click="isCollapsed = !isCollapsed">
           <el-icon>
@@ -50,12 +51,7 @@ const menuItems = [
       </div>
 
       <el-scrollbar class="menu-scroll">
-        <el-menu
-          :collapse="isCollapsed"
-          :default-active="activeMenu"
-          router
-          class="menu"
-        >
+        <el-menu :collapse="isCollapsed" :default-active="activeMenu" router class="menu">
           <el-menu-item v-for="item in menuItems" :key="item.path" :index="item.path">
             <el-icon><component :is="item.icon" /></el-icon>
             <span>{{ item.title }}</span>
@@ -70,12 +66,14 @@ const menuItems = [
           <div class="header-title">{{ pageTitle }}</div>
         </div>
         <div class="header-right">
-          <el-space :size="12">
+          <el-space :size="12" wrap>
             <el-tag type="info" effect="light">账号：{{ accountSummary.total }}</el-tag>
-            <el-tag type="success" effect="light">已登录：{{ accountSummary.loggedIn }}</el-tag>
-            <el-tag type="warning" effect="light">运行中：{{ accountSummary.running }}</el-tag>
+            <el-tag type="success" effect="light">Token：{{ accountSummary.loggedIn }}</el-tag>
+            <el-tag :type="engineRunning ? 'success' : 'info'" effect="light">
+              引擎：{{ engineRunning ? '运行中' : '未运行' }}
+            </el-tag>
             <el-tag type="info" effect="light">任务：{{ taskSummary.total }}</el-tag>
-            <el-tag type="warning" effect="light">任务运行：{{ taskSummary.running }}</el-tag>
+            <el-tag type="warning" effect="light">运行/排队：{{ taskSummary.running }}</el-tag>
           </el-space>
         </div>
       </el-header>
@@ -144,3 +142,4 @@ const menuItems = [
   padding: 14px;
 }
 </style>
+

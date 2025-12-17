@@ -12,6 +12,16 @@ export default defineConfig({
   },
   server: {
     proxy: {
+      // Go backend (dev)
+      '/api/v1': {
+        target: 'http://127.0.0.1:8090',
+        changeOrigin: true,
+      },
+      '/ws': {
+        target: 'ws://127.0.0.1:8090',
+        ws: true,
+        changeOrigin: true,
+      },
       '/api': {
         target: 'https://m.4008117117.com',
         changeOrigin: true,
