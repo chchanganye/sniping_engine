@@ -1,5 +1,6 @@
 import { defineStore } from 'pinia'
 import type { Account } from '@/types/core'
+import { apiLoginBySmsCode } from '@/services/api'
 import { beDeleteAccount, beListAccounts, beUpsertAccount, type BackendAccount } from '@/services/backend'
 
 function normalizeAccount(raw: BackendAccount): Account {
@@ -64,6 +65,48 @@ export const useAccountsStore = defineStore('accounts', {
       else this.accounts.unshift(normalized)
       return normalized
     },
+    async loginBySms(payload: {
+      mobile: string
+      smsCode: string
+      proxy?: string
+      userAgent?: string
+      deviceId?: string
+      uuid?: string
+    }) {
+      const mobile = payload.mobile.trim()
+      const smsCode = payload.smsCode.trim()
+      if (!mobile) throw new Error('请输入手机号')
+      if (!smsCode) throw new Error('请输入短信验证码')
+
+      const existing = this.accounts.find((a) => a.mobile === mobile) ?? null
+      const userAgent =
+        payload.userAgent?.trim() ||
+        existing?.userAgent ||
+        (typeof navigator !== 'undefined' ? navigator.userAgent : '') ||
+        undefined
+      const deviceId = payload.deviceId?.trim() || existing?.deviceId || randomHex(16)
+      const uuid = payload.uuid?.trim() || existing?.uuid || `${Date.now()}_${randomHex(10)}`
+
+      await this.upsert({
+        id: existing?.id,
+        mobile,
+        proxy: payload.proxy?.trim() || existing?.proxy,
+        userAgent,
+        deviceId,
+        uuid,
+      })
+
+      await apiLoginBySmsCode({
+        mobile,
+        smsCode,
+        deviceType: 'WXAPP',
+        userAgent,
+        deviceId,
+        uuid,
+      })
+
+      await this.refresh()
+    },
     async remove(id: string) {
       await beDeleteAccount(id)
       this.accounts = this.accounts.filter((a) => a.id !== id)
@@ -71,3 +114,12 @@ export const useAccountsStore = defineStore('accounts', {
   },
 })
 
+function randomHex(bytes: number): string {
+  const buf = new Uint8Array(bytes)
+  if (typeof crypto !== 'undefined' && 'getRandomValues' in crypto) {
+    crypto.getRandomValues(buf)
+  } else {
+    for (let i = 0; i < bytes; i += 1) buf[i] = Math.floor(Math.random() * 256)
+  }
+  return Array.from(buf, (b) => b.toString(16).padStart(2, '0')).join('')
+}

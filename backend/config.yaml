@@ -24,10 +24,9 @@ task:
   scanIntervalMs: 800
 
 provider:
-  baseURL: "http://127.0.0.1:8080/mock"
+  baseURL: "https://m.4008117117.com"
   timeoutMs: 20000
   retry:
     count: 2
     waitMs: 200
     maxWaitMs: 1200
-

@@ -7,6 +7,7 @@ import { Delete, Edit, Plus, Refresh } from '@element-plus/icons-vue'
 import StatusTag from '@/components/StatusTag.vue'
 import type { Account } from '@/types/core'
 import { useAccountsStore } from '@/stores/accounts'
+import { apiGetCaptcha, apiSendSmsCode } from '@/services/api'
 
 const accountsStore = useAccountsStore()
 const { accounts, loading } = storeToRefs(accountsStore)
@@ -15,12 +16,150 @@ onMounted(() => {
   void accountsStore.refresh().catch(() => null)
 })
 
+// Add/Login (SMS) dialog
+const addDialogVisible = ref(false)
+const addFormRef = ref<FormInstance>()
+const addForm = reactive({
+  mobile: '',
+  captchaCode: '',
+  smsCode: '',
+})
+const addRules: FormRules = {
+  mobile: [
+    { required: true, message: '请输入手机号', trigger: 'blur' },
+    { pattern: /^1\\d{10}$/, message: '手机号格式不正确', trigger: 'blur' },
+  ],
+  captchaCode: [{ required: true, message: '请输入图形验证码', trigger: 'blur' }],
+  smsCode: [{ required: true, message: '请输入短信验证码', trigger: 'blur' }],
+}
+const addCaptcha = reactive({
+  token: '',
+  imageUrl: '',
+})
+const addCaptchaLoading = ref(false)
+const addSmsCountdown = ref(0)
+const addSmsSending = ref(false)
+const addSubmitting = ref(false)
+let addSmsTimer: number | undefined
+
+function stopAddSmsTimer() {
+  if (addSmsTimer) window.clearInterval(addSmsTimer)
+  addSmsTimer = undefined
+  addSmsCountdown.value = 0
+}
+
+async function fetchAddCaptcha() {
+  addCaptchaLoading.value = true
+  try {
+    const data = await apiGetCaptcha()
+    addCaptcha.token = data.token
+    addCaptcha.imageUrl = data.imageUrl
+    addForm.captchaCode = ''
+  } catch (e) {
+    ElMessage.error(e instanceof Error ? e.message : '获取图形验证码失败')
+  } finally {
+    addCaptchaLoading.value = false
+  }
+}
+
+async function openAdd() {
+  addForm.mobile = ''
+  addForm.captchaCode = ''
+  addForm.smsCode = ''
+  addCaptcha.token = ''
+  addCaptcha.imageUrl = ''
+  addDialogVisible.value = true
+  stopAddSmsTimer()
+  await fetchAddCaptcha()
+}
+
+async function openLogin(row: Account) {
+  addForm.mobile = row.mobile
+  addForm.captchaCode = ''
+  addForm.smsCode = ''
+  addCaptcha.token = ''
+  addCaptcha.imageUrl = ''
+  addDialogVisible.value = true
+  stopAddSmsTimer()
+  await fetchAddCaptcha()
+}
+
+function closeAdd() {
+  addDialogVisible.value = false
+  addForm.mobile = ''
+  addForm.captchaCode = ''
+  addForm.smsCode = ''
+  addCaptcha.token = ''
+  addCaptcha.imageUrl = ''
+  addSmsSending.value = false
+  stopAddSmsTimer()
+}
+
+async function sendAddSmsCode() {
+  if (addSmsCountdown.value > 0 || addSmsSending.value) return
+
+  const mobile = addForm.mobile.trim()
+  if (!/^1\\d{10}$/.test(mobile)) {
+    ElMessage.warning('请输入正确的手机号')
+    return
+  }
+  if (!addCaptcha.token) {
+    ElMessage.warning('请先获取图形验证码')
+    return
+  }
+  if (!addForm.captchaCode.trim()) {
+    ElMessage.warning('请输入图形验证码')
+    return
+  }
+
+  addSmsSending.value = true
+  try {
+    const ok = await apiSendSmsCode({
+      mobile,
+      captcha: addForm.captchaCode.trim(),
+      token: addCaptcha.token,
+    })
+    if (!ok) throw new Error('发送短信验证码失败')
+    ElMessage.success('短信验证码已发送')
+
+    addSmsCountdown.value = 60
+    addSmsTimer = window.setInterval(() => {
+      addSmsCountdown.value -= 1
+      if (addSmsCountdown.value <= 0) stopAddSmsTimer()
+    }, 1000)
+  } catch (e) {
+    ElMessage.error(e instanceof Error ? e.message : '发送短信验证码失败')
+  } finally {
+    addSmsSending.value = false
+  }
+}
+
+async function submitAdd() {
+  const ok = await addFormRef.value?.validate().catch(() => false)
+  if (!ok) return
+
+  addSubmitting.value = true
+  try {
+    const existed = accounts.value.some((a) => a.mobile === addForm.mobile.trim())
+    await accountsStore.loginBySms({
+      mobile: addForm.mobile,
+      smsCode: addForm.smsCode,
+    })
+    ElMessage.success(existed ? '登录成功' : '已新增并登录')
+    closeAdd()
+  } catch (e) {
+    ElMessage.error(e instanceof Error ? e.message : '登录失败')
+  } finally {
+    addSubmitting.value = false
+  }
+}
+
+// Edit dialog (optional fields)
 const dialogVisible = ref(false)
 const formRef = ref<FormInstance>()
 const form = reactive({
   id: '',
   mobile: '',
-  token: '',
   proxy: '',
   userAgent: '',
   deviceId: '',
@@ -39,22 +178,16 @@ const isEditing = computed(() => Boolean(form.id))
 function resetForm() {
   form.id = ''
   form.mobile = ''
-  form.token = ''
   form.proxy = ''
   form.userAgent = ''
   form.deviceId = ''
   form.uuid = ''
 }
 
-function openAdd() {
-  resetForm()
-  dialogVisible.value = true
-}
-
 function openEdit(row: Account) {
+  resetForm()
   form.id = row.id
   form.mobile = row.mobile
-  form.token = row.token ?? ''
   form.proxy = row.proxy ?? ''
   form.userAgent = row.userAgent ?? ''
   form.deviceId = row.deviceId ?? ''
@@ -69,7 +202,6 @@ async function submit() {
   await accountsStore.upsert({
     id: form.id || undefined,
     mobile: form.mobile.trim(),
-    token: form.token.trim() || undefined,
     proxy: form.proxy.trim() || undefined,
     userAgent: form.userAgent.trim() || undefined,
     deviceId: form.deviceId.trim() || undefined,
@@ -106,18 +238,15 @@ async function remove(row: Account) {
             <StatusTag kind="account" :status="row.status" />
           </template>
         </el-table-column>
-        <el-table-column label="Token" width="100">
-          <template #default="{ row }">
-            <el-tag :type="row.token ? 'success' : 'info'" size="small" effect="light">
-              {{ row.token ? '已配置' : '未配置' }}
-            </el-tag>
-          </template>
-        </el-table-column>
         <el-table-column prop="proxy" label="独立代理" min-width="200" show-overflow-tooltip />
+        <el-table-column prop="userAgent" label="用户代理" min-width="220" show-overflow-tooltip />
+        <el-table-column prop="deviceId" label="设备ID" min-width="200" show-overflow-tooltip />
+        <el-table-column prop="uuid" label="UUID" min-width="220" show-overflow-tooltip />
         <el-table-column prop="updatedAt" label="更新时间" width="200" show-overflow-tooltip />
-        <el-table-column label="操作" width="200">
+        <el-table-column label="操作" width="220" fixed="right">
           <template #default="{ row }">
             <el-space :size="8">
+              <el-button size="small" type="primary" plain @click="openLogin(row)">登录</el-button>
               <el-button size="small" :icon="Edit" @click="openEdit(row)">编辑</el-button>
               <el-button size="small" type="danger" plain :icon="Delete" @click="remove(row)">删除</el-button>
             </el-space>
@@ -128,13 +257,57 @@ async function remove(row: Account) {
       <div v-if="accounts.length === 0" style="padding: 8px 0; color: #909399">暂无账号</div>
     </el-card>
 
-    <el-dialog v-model="dialogVisible" :title="isEditing ? '编辑账号' : '新增账号'" width="560px" destroy-on-close>
+    <el-dialog v-model="addDialogVisible" title="短信登录" width="520px" destroy-on-close @close="closeAdd">
+      <el-form ref="addFormRef" :model="addForm" :rules="addRules" label-width="110px">
+        <el-form-item label="手机号" prop="mobile">
+          <el-input v-model="addForm.mobile" placeholder="请输入手机号" autocomplete="off" />
+        </el-form-item>
+
+        <el-form-item label="图形验证码" prop="captchaCode">
+          <div class="captcha-row">
+            <el-input
+              v-model="addForm.captchaCode"
+              placeholder="请输入图形验证码"
+              style="flex: 1"
+              autocomplete="off"
+            />
+            <div class="captcha-img">
+              <el-skeleton :loading="addCaptchaLoading" animated>
+                <template #template>
+                  <div style="width: 120px; height: 40px" />
+                </template>
+                <template #default>
+                  <img v-if="addCaptcha.imageUrl" :src="addCaptcha.imageUrl" alt="captcha" />
+                  <div v-else style="width: 120px; height: 40px; background: #f2f3f5" />
+                </template>
+              </el-skeleton>
+            </div>
+            <el-button :loading="addCaptchaLoading" @click="fetchAddCaptcha">刷新</el-button>
+          </div>
+        </el-form-item>
+
+        <el-form-item label="短信验证码" prop="smsCode">
+          <div class="sms-row">
+            <el-input v-model="addForm.smsCode" placeholder="请输入短信验证码" style="flex: 1" autocomplete="off" />
+            <el-button :loading="addSmsSending" :disabled="addSmsCountdown > 0 || addSmsSending" @click="sendAddSmsCode">
+              {{ addSmsCountdown > 0 ? `${addSmsCountdown}s 后重试` : '获取短信验证码' }}
+            </el-button>
+          </div>
+        </el-form-item>
+      </el-form>
+
+      <template #footer>
+        <el-space :size="8">
+          <el-button @click="closeAdd">取消</el-button>
+          <el-button type="primary" :loading="addSubmitting" @click="submitAdd">确认登录</el-button>
+        </el-space>
+      </template>
+    </el-dialog>
+
+    <el-dialog v-model="dialogVisible" title="编辑账号" width="560px" destroy-on-close>
       <el-form ref="formRef" :model="form" :rules="rules" label-width="110px">
         <el-form-item label="手机号" prop="mobile">
           <el-input v-model="form.mobile" placeholder="请输入手机号" autocomplete="off" />
-        </el-form-item>
-        <el-form-item label="Token">
-          <el-input v-model="form.token" placeholder="可选" autocomplete="off" />
         </el-form-item>
         <el-form-item label="独立代理">
           <el-input v-model="form.proxy" placeholder="可选" autocomplete="off" />
@@ -165,5 +338,37 @@ async function remove(row: Account) {
   align-items: center;
   justify-content: flex-end;
   gap: 12px;
+}
+
+.captcha-row {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  width: 100%;
+}
+
+.captcha-img {
+  width: 120px;
+  height: 40px;
+  border-radius: 6px;
+  overflow: hidden;
+  flex: 0 0 auto;
+  border: 1px solid #ebeef5;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.captcha-img img {
+  width: 100%;
+  height: 100%;
+  object-fit: contain;
+}
+
+.sms-row {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  width: 100%;
 }
 </style>

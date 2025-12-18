@@ -2,6 +2,8 @@ package httpapi
 
 import (
 	"context"
+	"encoding/json"
+	"errors"
 	"io"
 	"net/http"
 	"net/http/cookiejar"
@@ -30,22 +32,24 @@ type Options struct {
 }
 
 type Server struct {
-	cfg    config.Config
-	bus    *logbus.Bus
-	store  *sqlite.Store
-	engine *engine.Engine
-	notif  notify.Notifier
-	ws     *ws.Handler
+	cfg          config.Config
+	bus          *logbus.Bus
+	store        *sqlite.Store
+	engine       *engine.Engine
+	notif        notify.Notifier
+	ws           *ws.Handler
+	anonSessions *anonSessionStore
 }
 
 func New(opts Options) *Server {
 	return &Server{
-		cfg:    opts.Cfg,
-		bus:    opts.Bus,
-		store:  opts.Store,
-		engine: opts.Engine,
-		notif:  opts.Notifier,
-		ws:     ws.NewHandler(opts.Bus, opts.Cfg.Server.Cors.AllowOrigins),
+		cfg:          opts.Cfg,
+		bus:          opts.Bus,
+		store:        opts.Store,
+		engine:       opts.Engine,
+		notif:        opts.Notifier,
+		ws:           ws.NewHandler(opts.Bus, opts.Cfg.Server.Cors.AllowOrigins),
+		anonSessions: newAnonSessionStore(30*time.Minute, 2000),
 	}
 }
 
@@ -363,25 +367,6 @@ func (s *Server) handleUpstreamProxy(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	token := extractToken(r)
-	if token == "" {
-		writeJSON(w, http.StatusBadRequest, map[string]any{"error": "missing token (Authorization/token/x-token)"})
-		return
-	}
-
-	acc, err := s.store.GetAccountByToken(r.Context(), token)
-	if err != nil {
-		writeJSON(w, http.StatusBadRequest, map[string]any{"error": "account not found for token"})
-		return
-	}
-	acc.Token = token
-
-	client, jar, baseURL, err := s.newUpstreamClient(acc)
-	if err != nil {
-		writeJSON(w, http.StatusInternalServerError, map[string]any{"error": err.Error()})
-		return
-	}
-
 	upURL, err := buildUpstreamURL(s.cfg.Provider.BaseURL, r.URL.Path, r.URL.RawQuery)
 	if err != nil {
 		writeJSON(w, http.StatusBadRequest, map[string]any{"error": err.Error()})
@@ -391,6 +376,54 @@ func (s *Server) handleUpstreamProxy(w http.ResponseWriter, r *http.Request) {
 	var body []byte
 	if r.Body != nil {
 		body, _ = io.ReadAll(r.Body)
+	}
+
+	token := extractToken(r)
+
+	var (
+		acc        model.Account
+		client     *resty.Client
+		jar        *cookiejar.Jar
+		baseURL    *url.URL
+		persistAcc bool
+	)
+
+	if token != "" {
+		found, err := s.store.GetAccountByToken(r.Context(), token)
+		if err != nil {
+			writeJSON(w, http.StatusBadRequest, map[string]any{"error": "account not found for token"})
+			return
+		}
+		found.Token = token
+		acc = found
+		persistAcc = true
+
+		c, j, b, err := s.newUpstreamClient(acc)
+		if err != nil {
+			writeJSON(w, http.StatusInternalServerError, map[string]any{"error": err.Error()})
+			return
+		}
+		client, jar, baseURL = c, j, b
+	} else {
+		if !isAnonymousAllowedPath(r.URL.Path) {
+			writeJSON(w, http.StatusBadRequest, map[string]any{"error": "missing token (Authorization/token/x-token)"})
+			return
+		}
+		if s.anonSessions == nil {
+			writeJSON(w, http.StatusServiceUnavailable, map[string]any{"error": "anonymous session store unavailable"})
+			return
+		}
+		j, err := s.anonSessions.GetOrCreate(w, r)
+		if err != nil {
+			writeJSON(w, http.StatusInternalServerError, map[string]any{"error": err.Error()})
+			return
+		}
+		c, b, err := s.newAnonymousUpstreamClient(j, strings.TrimSpace(r.Header.Get("User-Agent")))
+		if err != nil {
+			writeJSON(w, http.StatusInternalServerError, map[string]any{"error": err.Error()})
+			return
+		}
+		client, jar, baseURL = c, j, b
 	}
 
 	req := client.R().SetContext(r.Context())
@@ -413,8 +446,13 @@ func (s *Server) handleUpstreamProxy(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	acc.Cookies = exportCookies(baseURL, jar)
-	_, _ = s.store.UpsertAccount(r.Context(), acc)
+	if persistAcc {
+		acc.Cookies = exportCookies(baseURL, jar)
+		_, _ = s.store.UpsertAccount(r.Context(), acc)
+	}
+	if token == "" && r.URL.Path == "/api/user/web/login/login-by-sms-code" {
+		_ = s.tryPersistLoginSession(r.Context(), body, resp.Body(), baseURL, jar)
+	}
 
 	if ct := strings.TrimSpace(resp.Header().Get("Content-Type")); ct != "" {
 		w.Header().Set("Content-Type", ct)
@@ -423,6 +461,165 @@ func (s *Server) handleUpstreamProxy(w http.ResponseWriter, r *http.Request) {
 	}
 	w.WriteHeader(resp.StatusCode())
 	_, _ = w.Write(resp.Body())
+}
+
+func isAnonymousAllowedPath(path string) bool {
+	switch path {
+	case "/api/user/web/get-captcha",
+		"/api/user/web/login/login-send-sms-code",
+		"/api/user/web/login/login-by-sms-code":
+		return true
+	default:
+		return false
+	}
+}
+
+func (s *Server) newAnonymousUpstreamClient(jar *cookiejar.Jar, userAgent string) (*resty.Client, *url.URL, error) {
+	if jar == nil {
+		return nil, nil, errors.New("cookie jar is required")
+	}
+
+	baseURL, err := url.Parse(strings.TrimSpace(s.cfg.Provider.BaseURL))
+	if err != nil {
+		return nil, nil, err
+	}
+
+	client := resty.New().
+		SetTimeout(s.cfg.Provider.Timeout()).
+		SetCookieJar(jar).
+		SetRetryCount(s.cfg.Provider.Retry.Count).
+		SetRetryWaitTime(s.cfg.Provider.Retry.Wait()).
+		SetRetryMaxWaitTime(s.cfg.Provider.Retry.MaxWait()).
+		AddRetryCondition(func(r *resty.Response, err error) bool {
+			if err != nil {
+				return true
+			}
+			if r == nil {
+				return true
+			}
+			return r.StatusCode() >= 500
+		})
+
+	proxy := strings.TrimSpace(s.cfg.Proxy.Global)
+	if proxy != "" {
+		client.SetProxy(proxy)
+	}
+
+	ua := strings.TrimSpace(userAgent)
+	if ua == "" {
+		ua = strings.TrimSpace(s.cfg.Provider.UserAgent)
+	}
+	if ua != "" {
+		client.SetHeader("User-Agent", ua)
+	}
+
+	client.OnBeforeRequest(func(_ *resty.Client, req *resty.Request) error {
+		if s.bus != nil {
+			s.bus.Log("debug", "proxy request", map[string]any{
+				"method": req.Method,
+				"url":    req.URL,
+			})
+		}
+		return nil
+	})
+
+	return client, baseURL, nil
+}
+
+func (s *Server) tryPersistLoginSession(ctx context.Context, reqBody, respBody []byte, baseURL *url.URL, jar *cookiejar.Jar) error {
+	if s.store == nil {
+		return nil
+	}
+	mobile, ua, deviceID, uuid, err := extractLoginRequestFields(reqBody)
+	if err != nil || strings.TrimSpace(mobile) == "" {
+		return nil
+	}
+	token, err := extractLoginToken(respBody)
+	if err != nil || strings.TrimSpace(token) == "" {
+		return nil
+	}
+
+	existing, _ := s.store.GetAccountByMobile(ctx, strings.TrimSpace(mobile))
+	acc := existing
+	acc.Mobile = strings.TrimSpace(mobile)
+	acc.Token = strings.TrimSpace(token)
+	if strings.TrimSpace(acc.UserAgent) == "" && strings.TrimSpace(ua) != "" {
+		acc.UserAgent = strings.TrimSpace(ua)
+	}
+	if strings.TrimSpace(acc.DeviceID) == "" && strings.TrimSpace(deviceID) != "" {
+		acc.DeviceID = strings.TrimSpace(deviceID)
+	}
+	if strings.TrimSpace(acc.UUID) == "" && strings.TrimSpace(uuid) != "" {
+		acc.UUID = strings.TrimSpace(uuid)
+	}
+	acc.Cookies = exportCookies(baseURL, jar)
+
+	_, err = s.store.UpsertAccount(ctx, acc)
+	return err
+}
+
+func extractLoginRequestFields(body []byte) (mobile string, userAgent string, deviceID string, uuid string, err error) {
+	if len(body) == 0 {
+		return "", "", "", "", nil
+	}
+	var m map[string]any
+	if err := json.Unmarshal(body, &m); err != nil {
+		return "", "", "", "", err
+	}
+	if v, ok := m["mobile"].(string); ok {
+		mobile = v
+	}
+	if v, ok := m["userAgent"].(string); ok {
+		userAgent = v
+	}
+	if v, ok := m["deviceId"].(string); ok {
+		deviceID = v
+	}
+	if v, ok := m["uuid"].(string); ok {
+		uuid = v
+	}
+	return mobile, userAgent, deviceID, uuid, nil
+}
+
+func extractLoginToken(body []byte) (string, error) {
+	if len(body) == 0 {
+		return "", nil
+	}
+	var m map[string]any
+	if err := json.Unmarshal(body, &m); err != nil {
+		return "", err
+	}
+	if s, ok := m["success"].(bool); ok && !s {
+		return "", nil
+	}
+
+	candidates := []any{
+		m["token"],
+	}
+
+	if data, _ := m["data"].(map[string]any); data != nil {
+		candidates = append(candidates,
+			data["token"],
+			data["accessToken"],
+			data["access_token"],
+			data["jwt"],
+		)
+		if extra, _ := data["extra"].(map[string]any); extra != nil {
+			candidates = append(candidates,
+				extra["token"],
+				extra["accessToken"],
+				extra["access_token"],
+				extra["jwt"],
+			)
+		}
+	}
+
+	for _, c := range candidates {
+		if v, ok := c.(string); ok && strings.TrimSpace(v) != "" {
+			return v, nil
+		}
+	}
+	return "", nil
 }
 
 func extractToken(r *http.Request) string {

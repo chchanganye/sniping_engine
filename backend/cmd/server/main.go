@@ -2,11 +2,16 @@ package main
 
 import (
 	"context"
+	"encoding/json"
 	"flag"
+	"fmt"
 	"log"
+	"net"
 	"net/http"
 	"os"
 	"os/signal"
+	"path/filepath"
+	"strings"
 	"syscall"
 	"time"
 
@@ -29,6 +34,10 @@ func main() {
 	}
 
 	bus := logbus.New(200)
+	stopConsole := startConsoleLogger(bus)
+	defer stopConsole()
+
+	printStartupBanner(cfg, *configPath)
 	bus.Log("info", "server starting", map[string]any{"addr": cfg.Server.Addr})
 
 	ctx := context.Background()
@@ -64,8 +73,16 @@ func main() {
 	}
 
 	serverErr := make(chan error, 1)
+
+	ln, err := net.Listen("tcp", cfg.Server.Addr)
+	if err != nil {
+		bus.Log("error", "listen failed", map[string]any{"addr": cfg.Server.Addr, "error": err.Error()})
+		return
+	}
+	bus.Log("info", "http server listening", map[string]any{"addr": cfg.Server.Addr})
+
 	go func() {
-		serverErr <- server.ListenAndServe()
+		serverErr <- server.Serve(ln)
 	}()
 
 	stop := make(chan os.Signal, 1)
@@ -87,4 +104,98 @@ func main() {
 	_ = emailNotifier.Close(shutdownCtx)
 	_ = server.Shutdown(shutdownCtx)
 	bus.Log("info", "server stopped", nil)
+}
+
+func startConsoleLogger(bus *logbus.Bus) func() {
+	if bus == nil {
+		return func() {}
+	}
+
+	showDebug := strings.EqualFold(strings.TrimSpace(os.Getenv("SNIPING_ENGINE_DEBUG")), "1") ||
+		strings.EqualFold(strings.TrimSpace(os.Getenv("SNIPING_ENGINE_DEBUG")), "true")
+
+	ch, cancel := bus.Subscribe(256)
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		for msg := range ch {
+			if msg.Type != "log" {
+				continue
+			}
+			data, ok := msg.Data.(logbus.LogData)
+			if !ok {
+				continue
+			}
+			level := strings.ToLower(strings.TrimSpace(data.Level))
+			if level == "debug" && !showDebug {
+				continue
+			}
+
+			ts := time.UnixMilli(msg.Time).Format("2006-01-02 15:04:05.000")
+			lv := strings.ToUpper(level)
+			if lv == "" {
+				lv = "INFO"
+			}
+			line := fmt.Sprintf("%s %-5s %s", ts, lv, strings.TrimSpace(data.Msg))
+			if len(data.Fields) > 0 {
+				if b, err := json.Marshal(data.Fields); err == nil && len(b) > 0 {
+					line += " " + string(b)
+				}
+			}
+			fmt.Println(line)
+		}
+	}()
+
+	return func() {
+		cancel()
+		<-done
+	}
+}
+
+func printStartupBanner(cfg config.Config, configPath string) {
+	absCfg := strings.TrimSpace(configPath)
+	if p, err := filepath.Abs(configPath); err == nil {
+		absCfg = p
+	}
+	hostPort := displayHostPort(cfg.Server.Addr)
+	fmt.Println("============================================================")
+	fmt.Println("sniping_engine backend")
+	fmt.Println("------------------------------------------------------------")
+	fmt.Printf("Config    : %s\n", absCfg)
+	fmt.Printf("Listen    : http://%s\n", hostPort)
+	fmt.Printf("Health    : http://%s/health\n", hostPort)
+	fmt.Printf("WebSocket : ws://%s/ws\n", hostPort)
+	if strings.TrimSpace(cfg.Provider.BaseURL) != "" {
+		fmt.Printf("Upstream  : %s\n", strings.TrimSpace(cfg.Provider.BaseURL))
+	}
+	if strings.TrimSpace(cfg.Proxy.Global) != "" {
+		fmt.Printf("Proxy     : %s\n", strings.TrimSpace(cfg.Proxy.Global))
+	}
+	if strings.TrimSpace(cfg.Storage.SQLitePath) != "" {
+		fmt.Printf("SQLite    : %s\n", strings.TrimSpace(cfg.Storage.SQLitePath))
+	}
+	fmt.Println("------------------------------------------------------------")
+	if strings.TrimSpace(os.Getenv("SNIPING_ENGINE_DEBUG")) == "" {
+		fmt.Println("Tip       : set SNIPING_ENGINE_DEBUG=1 to show debug logs")
+	}
+	fmt.Println("============================================================")
+}
+
+func displayHostPort(addr string) string {
+	addr = strings.TrimSpace(addr)
+	if addr == "" {
+		return "127.0.0.1:8090"
+	}
+	if strings.HasPrefix(addr, ":") {
+		return "127.0.0.1" + addr
+	}
+	host, port, err := net.SplitHostPort(addr)
+	if err != nil {
+		return addr
+	}
+	host = strings.TrimSpace(host)
+	if host == "" || host == "0.0.0.0" || host == "::" {
+		host = "127.0.0.1"
+	}
+	return net.JoinHostPort(host, port)
 }
