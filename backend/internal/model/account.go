@@ -4,6 +4,7 @@ import "time"
 
 type Account struct {
 	ID        string           `json:"id"`
+	Username  string           `json:"username,omitempty"`
 	Mobile    string           `json:"mobile"`
 	Token     string           `json:"token,omitempty"`
 	UserAgent string           `json:"userAgent,omitempty"`
@@ -14,4 +15,3 @@ type Account struct {
 	CreatedAt time.Time        `json:"createdAt"`
 	UpdatedAt time.Time        `json:"updatedAt"`
 }
-

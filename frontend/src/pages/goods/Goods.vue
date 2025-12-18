@@ -5,9 +5,11 @@ import { storeToRefs } from 'pinia'
 import type { ShippingAddress, ShopCategoryNode } from '@/types/core'
 import { useAccountsStore } from '@/stores/accounts'
 import { useGoodsStore } from '@/stores/goods'
+import { useTasksStore } from '@/stores/tasks'
 
 const accountsStore = useAccountsStore()
 const goodsStore = useGoodsStore()
+const tasksStore = useTasksStore()
 
 const { accounts } = storeToRefs(accountsStore)
 const {
@@ -91,9 +93,10 @@ async function onTreeNodeClick(node: ShopCategoryNode) {
   await loadGoodsByCategory(node.id)
 }
 
-function addToTargetList(item: any) {
+async function addToTargetList(item: any) {
   if (!item?.id) return
   goodsStore.addTargetGoods(item)
+  await tasksStore.upsertFromGoods(item).catch(() => null)
   ElMessage.success('已加入目标清单')
 }
 

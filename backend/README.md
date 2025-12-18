@@ -24,7 +24,7 @@ go run ./cmd/server -config ./config.yaml
 
 3) WebSocket 日志
 
-- WS 地址：`ws://127.0.0.1:8090/ws`
+- WS 地址：`ws://localhost:8090/ws`（如本机 `127.0.0.1:8090` 被其他程序占用，可用 `ws://[::1]:8090/ws`）
 - 收到的消息为 JSON，`type=log` 或 `type=task_state`
 
 ## REST API（供前端调用）

@@ -12,6 +12,7 @@ const (
 type Target struct {
 	ID          string     `json:"id"`
 	Name        string     `json:"name,omitempty"`
+	ImageURL    string     `json:"imageUrl,omitempty"`
 	ItemID      int64      `json:"itemId"`
 	SKUID       int64      `json:"skuId"`
 	ShopID      int64      `json:"shopId,omitempty"`
@@ -23,4 +24,3 @@ type Target struct {
 	CreatedAt   time.Time  `json:"createdAt"`
 	UpdatedAt   time.Time  `json:"updatedAt"`
 }
-

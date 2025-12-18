@@ -2,6 +2,7 @@ export type AccountStatus = 'idle' | 'logging_in' | 'logged_in' | 'running' | 'e
 
 export interface Account {
   id: string
+  username?: string
   mobile: string
   token?: string
   userAgent?: string
@@ -131,6 +132,7 @@ export type TaskStatus = 'idle' | 'scheduled' | 'running' | 'success' | 'failed'
 export interface Task {
   id: string
   goodsTitle: string
+  imageUrl?: string
   mode: TaskMode
   itemId: number
   skuId: number

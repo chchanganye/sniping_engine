@@ -37,9 +37,6 @@ func main() {
 	stopConsole := startConsoleLogger(bus)
 	defer stopConsole()
 
-	printStartupBanner(cfg, *configPath)
-	bus.Log("info", "server starting", map[string]any{"addr": cfg.Server.Addr})
-
 	ctx := context.Background()
 	store, err := sqlite.Open(ctx, cfg.Storage.SQLitePath)
 	if err != nil {
@@ -79,7 +76,10 @@ func main() {
 		bus.Log("error", "listen failed", map[string]any{"addr": cfg.Server.Addr, "error": err.Error()})
 		return
 	}
-	bus.Log("info", "http server listening", map[string]any{"addr": cfg.Server.Addr})
+	hostPort := displayHostPortFromListener(ln, cfg.Server.Addr)
+	printStartupBanner(cfg, *configPath, hostPort)
+	bus.Log("info", "server starting", map[string]any{"addr": ln.Addr().String()})
+	bus.Log("info", "http server listening", map[string]any{"addr": ln.Addr().String()})
 
 	go func() {
 		serverErr <- server.Serve(ln)
@@ -148,16 +148,15 @@ func startConsoleLogger(bus *logbus.Bus) func() {
 
 	return func() {
 		cancel()
-		<-done
+	<-done
 	}
 }
 
-func printStartupBanner(cfg config.Config, configPath string) {
+func printStartupBanner(cfg config.Config, configPath string, hostPort string) {
 	absCfg := strings.TrimSpace(configPath)
 	if p, err := filepath.Abs(configPath); err == nil {
 		absCfg = p
 	}
-	hostPort := displayHostPort(cfg.Server.Addr)
 	fmt.Println("============================================================")
 	fmt.Println("sniping_engine backend")
 	fmt.Println("------------------------------------------------------------")
@@ -181,21 +180,35 @@ func printStartupBanner(cfg config.Config, configPath string) {
 	fmt.Println("============================================================")
 }
 
-func displayHostPort(addr string) string {
-	addr = strings.TrimSpace(addr)
+func displayHostPortFromListener(ln net.Listener, cfgAddr string) string {
+	if ln != nil {
+		if ta, ok := ln.Addr().(*net.TCPAddr); ok {
+			port := ta.Port
+			ip := ta.IP
+			if ip == nil || ip.To4() == nil {
+				return net.JoinHostPort("::1", fmt.Sprint(port))
+			}
+			return net.JoinHostPort("127.0.0.1", fmt.Sprint(port))
+		}
+	}
+
+	addr := strings.TrimSpace(cfgAddr)
 	if addr == "" {
 		return "127.0.0.1:8090"
 	}
 	if strings.HasPrefix(addr, ":") {
-		return "127.0.0.1" + addr
+		return net.JoinHostPort("127.0.0.1", strings.TrimPrefix(addr, ":"))
 	}
 	host, port, err := net.SplitHostPort(addr)
 	if err != nil {
 		return addr
 	}
 	host = strings.TrimSpace(host)
-	if host == "" || host == "0.0.0.0" || host == "::" {
+	if host == "" || host == "0.0.0.0" {
 		host = "127.0.0.1"
+	}
+	if host == "::" {
+		host = "::1"
 	}
 	return net.JoinHostPort(host, port)
 }

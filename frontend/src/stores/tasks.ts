@@ -41,6 +41,7 @@ function mapTargetToTask(target: BackendTarget, engine: EngineState | null): Tas
   return {
     id: target.id,
     goodsTitle: target.name || `${target.itemId}`,
+    imageUrl: typeof target.imageUrl === 'string' && target.imageUrl.trim() ? target.imageUrl.trim() : undefined,
     itemId: target.itemId,
     skuId: target.skuId,
     shopId: target.shopId,
@@ -112,25 +113,38 @@ export const useTasksStore = defineStore('tasks', {
       await this.ensureLoaded()
 
       for (const goods of goodsStore.targetGoods) {
-        const extracted = extractTargetFromGoods(goods)
-        if (!extracted) continue
-
-        const existing = this.tasks.find((t) => t.itemId === extracted.itemId && t.skuId === extracted.skuId)
-        await beUpsertTarget({
-          id: existing?.id,
-          name: extracted.name,
-          itemId: extracted.itemId,
-          skuId: extracted.skuId,
-          shopId: extracted.shopId,
-          mode: existing?.mode ?? 'rush',
-          targetQty: existing?.targetQty ?? 1,
-          perOrderQty: existing?.perOrderQty ?? 1,
-          rushAtMs: existing?.rushAtMs ?? 0,
-          enabled: existing?.enabled ?? true,
-        })
+        await this.upsertFromGoods(goods)
       }
 
       await this.refresh()
+    },
+    async upsertFromGoods(goods: GoodsItem) {
+      await this.ensureLoaded()
+      const extracted = extractTargetFromGoods(goods)
+      if (!extracted) return
+
+      const existing = this.tasks.find((t) => t.itemId === extracted.itemId && t.skuId === extracted.skuId)
+      const imageUrl = (typeof goods.imageUrl === 'string' && goods.imageUrl.trim() ? goods.imageUrl.trim() : undefined) ??
+        (typeof (goods.raw as any)?.mainImage === 'string' ? String((goods.raw as any).mainImage) : undefined)
+
+      const saved = await beUpsertTarget({
+        id: existing?.id,
+        name: extracted.name,
+        imageUrl: imageUrl ?? existing?.imageUrl,
+        itemId: extracted.itemId,
+        skuId: extracted.skuId,
+        shopId: extracted.shopId,
+        mode: existing?.mode ?? 'rush',
+        targetQty: existing?.targetQty ?? 1,
+        perOrderQty: existing?.perOrderQty ?? 1,
+        rushAtMs: existing?.rushAtMs ?? 0,
+        enabled: existing?.enabled ?? false,
+      })
+
+      const mapped = mapTargetToTask(saved, this.engine)
+      const idx = this.tasks.findIndex((t) => t.id === mapped.id)
+      if (idx >= 0) this.tasks.splice(idx, 1, mapped)
+      else this.tasks.unshift(mapped)
     },
     async updateTask(id: string, patch: Partial<Pick<Task, 'mode' | 'targetQty' | 'perOrderQty' | 'rushAtMs' | 'enabled' | 'goodsTitle'>>) {
       const current = this.tasks.find((t) => t.id === id)
@@ -143,6 +157,7 @@ export const useTasksStore = defineStore('tasks', {
       const saved = await beUpsertTarget({
         id: next.id,
         name: next.goodsTitle,
+        imageUrl: next.imageUrl,
         itemId: next.itemId,
         skuId: next.skuId,
         shopId: next.shopId,
@@ -170,6 +185,7 @@ export const useTasksStore = defineStore('tasks', {
         this.tasks = this.tasks.map((t) => mapTargetToTask({
           id: t.id,
           name: t.goodsTitle,
+          imageUrl: t.imageUrl,
           itemId: t.itemId,
           skuId: t.skuId,
           shopId: t.shopId,

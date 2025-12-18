@@ -3,7 +3,6 @@ import { computed, onMounted } from 'vue'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import { storeToRefs } from 'pinia'
 import { Delete, Refresh } from '@element-plus/icons-vue'
-import StatusTag from '@/components/StatusTag.vue'
 import { useAccountsStore } from '@/stores/accounts'
 import { useGoodsStore } from '@/stores/goods'
 import { useTasksStore } from '@/stores/tasks'
@@ -35,15 +34,6 @@ const modeOptions: Array<{ label: string; value: TaskMode }> = [
 
 const enabledCount = computed(() => tasks.value.filter((t) => t.enabled).length)
 
-async function importTargets() {
-  if (targetGoods.value.length === 0) {
-    ElMessage.warning('请先在“商品列表”把商品加入目标清单')
-    return
-  }
-  await tasksStore.importFromGoodsSelection()
-  ElMessage.success('已导入/同步')
-}
-
 async function start() {
   if (accounts.value.length === 0) {
     ElMessage.warning('请先添加账号')
@@ -73,6 +63,24 @@ function onRushAtChange(row: Task, value: Date | null) {
   row.rushAtMs = ms
   void tasksStore.updateTask(row.id, { rushAtMs: ms })
 }
+
+function statusMeta(row: Task) {
+  if (!row.enabled) return { type: 'info' as const, text: '未监控' }
+  switch (row.status) {
+    case 'success':
+      return { type: 'success' as const, text: '已完成' }
+    case 'scheduled':
+      return { type: 'warning' as const, text: '等待中' }
+    case 'failed':
+      return { type: 'danger' as const, text: '异常' }
+    case 'stopped':
+      return { type: 'info' as const, text: '已停止' }
+    case 'running':
+      return { type: 'primary' as const, text: row.mode === 'scan' ? '监控中' : '抢购中' }
+    default:
+      return { type: 'info' as const, text: engineRunning.value ? '执行中' : '未运行' }
+  }
+}
 </script>
 
 <template>
@@ -87,7 +95,6 @@ function onRushAtChange(row: Task, value: Date | null) {
         </div>
         <el-space :size="8" wrap>
           <el-button :loading="loading" :icon="Refresh" @click="tasksStore.refresh()">刷新</el-button>
-          <el-button type="primary" @click="importTargets">从商品目标清单导入</el-button>
           <el-button type="success" :disabled="engineRunning" :loading="engineLoading" @click="start">开始执行</el-button>
           <el-button type="warning" :disabled="!engineRunning" :loading="engineLoading" @click="stop">停止执行</el-button>
         </el-space>
@@ -100,17 +107,15 @@ function onRushAtChange(row: Task, value: Date | null) {
           <template #default="{ row }">
             <div style="display: flex; align-items: center; gap: 10px; min-width: 0">
               <el-image
-                v-if="goodsMap.get(String(row.itemId))?.imageUrl"
-                :src="goodsMap.get(String(row.itemId))?.imageUrl"
+                v-if="row.imageUrl || goodsMap.get(String(row.itemId))?.imageUrl"
+                :src="row.imageUrl || goodsMap.get(String(row.itemId))?.imageUrl"
                 fit="cover"
                 style="width: 44px; height: 44px; border-radius: 6px; flex: 0 0 auto"
               />
+              <div v-else style="width: 44px; height: 44px; border-radius: 6px; background: #f2f3f5; flex: 0 0 auto" />
               <div style="min-width: 0">
                 <div style="font-weight: 600; overflow: hidden; text-overflow: ellipsis; white-space: nowrap">
                   {{ row.goodsTitle }}
-                </div>
-                <div style="color: #909399; font-size: 12px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap">
-                  itemId={{ row.itemId }} / skuId={{ row.skuId }} / shopId={{ row.shopId ?? '-' }}
                 </div>
               </div>
             </div>
@@ -157,62 +162,53 @@ function onRushAtChange(row: Task, value: Date | null) {
           </template>
         </el-table-column>
 
-        <el-table-column label="目标数量" width="120">
+        <el-table-column label="目标数量" width="150">
           <template #default="{ row }">
             <el-input-number
               v-model="row.targetQty"
               :min="1"
               :max="9999"
               size="small"
+              controls-position="right"
+              style="width: 100%"
               :disabled="engineRunning"
               @change="() => tasksStore.updateTask(row.id, { targetQty: row.targetQty })"
             />
           </template>
         </el-table-column>
 
-        <el-table-column label="单次数量" width="120">
+        <el-table-column label="单次数量" width="150">
           <template #default="{ row }">
             <el-input-number
               v-model="row.perOrderQty"
               :min="1"
               :max="999"
               size="small"
+              controls-position="right"
+              style="width: 100%"
               :disabled="engineRunning"
               @change="() => tasksStore.updateTask(row.id, { perOrderQty: row.perOrderQty })"
             />
           </template>
         </el-table-column>
 
-        <el-table-column label="进度" width="120">
+        <el-table-column label="状态" min-width="220">
           <template #default="{ row }">
-            <div>{{ row.purchasedQty }}/{{ row.targetQty }}</div>
+            <el-space :size="6" wrap>
+              <el-tooltip v-if="row.lastError && row.status === 'failed'" :content="row.lastError" placement="top">
+                <el-tag :type="statusMeta(row).type" size="small" effect="light">{{ statusMeta(row).text }}</el-tag>
+              </el-tooltip>
+              <el-tag v-else :type="statusMeta(row).type" size="small" effect="light">{{ statusMeta(row).text }}</el-tag>
+              <el-tag type="info" size="small" effect="light">已抢 {{ row.purchasedQty }}/{{ row.targetQty }}</el-tag>
+            </el-space>
           </template>
         </el-table-column>
 
-        <el-table-column label="状态" width="110">
+        <el-table-column label="操作" width="80">
           <template #default="{ row }">
-            <StatusTag kind="task" :status="row.status" />
-          </template>
-        </el-table-column>
-
-        <el-table-column label="最新错误" min-width="220" show-overflow-tooltip>
-          <template #default="{ row }">
-            <span>{{ row.lastError || '-' }}</span>
-          </template>
-        </el-table-column>
-
-        <el-table-column label="操作" width="120">
-          <template #default="{ row }">
-            <el-button
-              size="small"
-              type="danger"
-              plain
-              :icon="Delete"
-              :disabled="engineRunning"
-              @click="remove(row)"
-            >
-              删除
-            </el-button>
+            <el-tooltip content="删除" placement="top">
+              <el-button circle size="small" type="danger" :icon="Delete" :disabled="engineRunning" @click="remove(row)" />
+            </el-tooltip>
           </template>
         </el-table-column>
       </el-table>

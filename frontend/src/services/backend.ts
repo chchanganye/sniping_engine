@@ -2,6 +2,7 @@ import { http } from '@/services/http'
 
 export interface BackendAccount {
   id: string
+  username?: string
   mobile: string
   token?: string
   userAgent?: string
@@ -17,6 +18,7 @@ export type TargetMode = 'rush' | 'scan'
 export interface BackendTarget {
   id: string
   name?: string
+  imageUrl?: string
   itemId: number
   skuId: number
   shopId?: number

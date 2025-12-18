@@ -31,9 +31,10 @@ func (s *Store) UpsertAccount(ctx context.Context, acc model.Account) (model.Acc
 	}
 
 	_, err = s.db.ExecContext(ctx, `
-		INSERT INTO accounts (id, mobile, token, user_agent, device_id, uuid, proxy, cookies_json, created_at, updated_at)
-		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+		INSERT INTO accounts (id, username, mobile, token, user_agent, device_id, uuid, proxy, cookies_json, created_at, updated_at)
+		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 		ON CONFLICT(mobile) DO UPDATE SET
+			username = excluded.username,
 			token = excluded.token,
 			user_agent = excluded.user_agent,
 			device_id = excluded.device_id,
@@ -41,7 +42,7 @@ func (s *Store) UpsertAccount(ctx context.Context, acc model.Account) (model.Acc
 			proxy = excluded.proxy,
 			cookies_json = excluded.cookies_json,
 			updated_at = excluded.updated_at
-	`, acc.ID, acc.Mobile, acc.Token, acc.UserAgent, acc.DeviceID, acc.UUID, acc.Proxy, string(cookiesJSON), acc.CreatedAt.UnixMilli(), acc.UpdatedAt.UnixMilli())
+	`, acc.ID, acc.Username, acc.Mobile, acc.Token, acc.UserAgent, acc.DeviceID, acc.UUID, acc.Proxy, string(cookiesJSON), acc.CreatedAt.UnixMilli(), acc.UpdatedAt.UnixMilli())
 	if err != nil {
 		return model.Account{}, err
 	}
@@ -52,6 +53,7 @@ func (s *Store) UpsertAccount(ctx context.Context, acc model.Account) (model.Acc
 func (s *Store) GetAccountByMobile(ctx context.Context, mobile string) (model.Account, error) {
 	var row struct {
 		id        string
+		username  string
 		mobile    string
 		token     string
 		userAgent string
@@ -63,9 +65,9 @@ func (s *Store) GetAccountByMobile(ctx context.Context, mobile string) (model.Ac
 		updatedAt int64
 	}
 	err := s.db.QueryRowContext(ctx, `
-		SELECT id, mobile, token, user_agent, device_id, uuid, proxy, cookies_json, created_at, updated_at
+		SELECT id, username, mobile, token, user_agent, device_id, uuid, proxy, cookies_json, created_at, updated_at
 		FROM accounts WHERE mobile = ?
-	`, mobile).Scan(&row.id, &row.mobile, &row.token, &row.userAgent, &row.deviceID, &row.uuid, &row.proxy, &row.cookies, &row.createdAt, &row.updatedAt)
+	`, mobile).Scan(&row.id, &row.username, &row.mobile, &row.token, &row.userAgent, &row.deviceID, &row.uuid, &row.proxy, &row.cookies, &row.createdAt, &row.updatedAt)
 	if err != nil {
 		return model.Account{}, err
 	}
@@ -73,6 +75,7 @@ func (s *Store) GetAccountByMobile(ctx context.Context, mobile string) (model.Ac
 	_ = json.Unmarshal([]byte(row.cookies), &cookies)
 	return model.Account{
 		ID:        row.id,
+		Username:  row.username,
 		Mobile:    row.mobile,
 		Token:     row.token,
 		UserAgent: row.userAgent,
@@ -88,6 +91,7 @@ func (s *Store) GetAccountByMobile(ctx context.Context, mobile string) (model.Ac
 func (s *Store) GetAccount(ctx context.Context, id string) (model.Account, error) {
 	var row struct {
 		id        string
+		username  string
 		mobile    string
 		token     string
 		userAgent string
@@ -99,9 +103,9 @@ func (s *Store) GetAccount(ctx context.Context, id string) (model.Account, error
 		updatedAt int64
 	}
 	err := s.db.QueryRowContext(ctx, `
-		SELECT id, mobile, token, user_agent, device_id, uuid, proxy, cookies_json, created_at, updated_at
+		SELECT id, username, mobile, token, user_agent, device_id, uuid, proxy, cookies_json, created_at, updated_at
 		FROM accounts WHERE id = ?
-	`, id).Scan(&row.id, &row.mobile, &row.token, &row.userAgent, &row.deviceID, &row.uuid, &row.proxy, &row.cookies, &row.createdAt, &row.updatedAt)
+	`, id).Scan(&row.id, &row.username, &row.mobile, &row.token, &row.userAgent, &row.deviceID, &row.uuid, &row.proxy, &row.cookies, &row.createdAt, &row.updatedAt)
 	if err != nil {
 		return model.Account{}, err
 	}
@@ -109,6 +113,7 @@ func (s *Store) GetAccount(ctx context.Context, id string) (model.Account, error
 	_ = json.Unmarshal([]byte(row.cookies), &cookies)
 	return model.Account{
 		ID:        row.id,
+		Username:  row.username,
 		Mobile:    row.mobile,
 		Token:     row.token,
 		UserAgent: row.userAgent,
@@ -127,6 +132,7 @@ func (s *Store) GetAccountByToken(ctx context.Context, token string) (model.Acco
 	}
 	var row struct {
 		id        string
+		username  string
 		mobile    string
 		token     string
 		userAgent string
@@ -138,9 +144,9 @@ func (s *Store) GetAccountByToken(ctx context.Context, token string) (model.Acco
 		updatedAt int64
 	}
 	err := s.db.QueryRowContext(ctx, `
-		SELECT id, mobile, token, user_agent, device_id, uuid, proxy, cookies_json, created_at, updated_at
+		SELECT id, username, mobile, token, user_agent, device_id, uuid, proxy, cookies_json, created_at, updated_at
 		FROM accounts WHERE token = ? ORDER BY updated_at DESC LIMIT 1
-	`, token).Scan(&row.id, &row.mobile, &row.token, &row.userAgent, &row.deviceID, &row.uuid, &row.proxy, &row.cookies, &row.createdAt, &row.updatedAt)
+	`, token).Scan(&row.id, &row.username, &row.mobile, &row.token, &row.userAgent, &row.deviceID, &row.uuid, &row.proxy, &row.cookies, &row.createdAt, &row.updatedAt)
 	if err != nil {
 		return model.Account{}, fmt.Errorf("get account by token: %w", err)
 	}
@@ -148,6 +154,7 @@ func (s *Store) GetAccountByToken(ctx context.Context, token string) (model.Acco
 	_ = json.Unmarshal([]byte(row.cookies), &cookies)
 	return model.Account{
 		ID:        row.id,
+		Username:  row.username,
 		Mobile:    row.mobile,
 		Token:     row.token,
 		UserAgent: row.userAgent,
@@ -162,7 +169,7 @@ func (s *Store) GetAccountByToken(ctx context.Context, token string) (model.Acco
 
 func (s *Store) ListAccounts(ctx context.Context) ([]model.Account, error) {
 	rows, err := s.db.QueryContext(ctx, `
-		SELECT id, mobile, token, user_agent, device_id, uuid, proxy, cookies_json, created_at, updated_at
+		SELECT id, username, mobile, token, user_agent, device_id, uuid, proxy, cookies_json, created_at, updated_at
 		FROM accounts ORDER BY updated_at DESC
 	`)
 	if err != nil {
@@ -174,6 +181,7 @@ func (s *Store) ListAccounts(ctx context.Context) ([]model.Account, error) {
 	for rows.Next() {
 		var row struct {
 			id        string
+			username  string
 			mobile    string
 			token     string
 			userAgent string
@@ -184,13 +192,14 @@ func (s *Store) ListAccounts(ctx context.Context) ([]model.Account, error) {
 			createdAt int64
 			updatedAt int64
 		}
-		if err := rows.Scan(&row.id, &row.mobile, &row.token, &row.userAgent, &row.deviceID, &row.uuid, &row.proxy, &row.cookies, &row.createdAt, &row.updatedAt); err != nil {
+		if err := rows.Scan(&row.id, &row.username, &row.mobile, &row.token, &row.userAgent, &row.deviceID, &row.uuid, &row.proxy, &row.cookies, &row.createdAt, &row.updatedAt); err != nil {
 			return nil, err
 		}
 		var cookies []model.CookieJarEntry
 		_ = json.Unmarshal([]byte(row.cookies), &cookies)
 		out = append(out, model.Account{
 			ID:        row.id,
+			Username:  row.username,
 			Mobile:    row.mobile,
 			Token:     row.token,
 			UserAgent: row.userAgent,

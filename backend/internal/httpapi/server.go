@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"io"
 	"net/http"
 	"net/http/cookiejar"
@@ -447,6 +448,11 @@ func (s *Server) handleUpstreamProxy(w http.ResponseWriter, r *http.Request) {
 	}
 
 	if persistAcc {
+		if r.URL.Path == "/api/user/web/current-user" {
+			if username := extractCurrentUserUsername(resp.Body()); username != "" {
+				acc.Username = username
+			}
+		}
 		acc.Cookies = exportCookies(baseURL, jar)
 		_, _ = s.store.UpsertAccount(r.Context(), acc)
 	}
@@ -553,6 +559,11 @@ func (s *Server) tryPersistLoginSession(ctx context.Context, reqBody, respBody [
 		acc.UUID = strings.TrimSpace(uuid)
 	}
 	acc.Cookies = exportCookies(baseURL, jar)
+	if strings.TrimSpace(acc.Username) == "" {
+		if username, _ := s.fetchCurrentUserUsername(ctx, jar, token, ua); strings.TrimSpace(username) != "" {
+			acc.Username = strings.TrimSpace(username)
+		}
+	}
 
 	_, err = s.store.UpsertAccount(ctx, acc)
 	return err
@@ -579,6 +590,93 @@ func extractLoginRequestFields(body []byte) (mobile string, userAgent string, de
 		uuid = v
 	}
 	return mobile, userAgent, deviceID, uuid, nil
+}
+
+func (s *Server) fetchCurrentUserUsername(ctx context.Context, jar *cookiejar.Jar, token string, userAgent string) (string, error) {
+	if jar == nil {
+		return "", errors.New("cookie jar is required")
+	}
+	if strings.TrimSpace(s.cfg.Provider.BaseURL) == "" {
+		return "", errors.New("provider.baseURL not configured")
+	}
+	if strings.TrimSpace(token) == "" {
+		return "", errors.New("token is required")
+	}
+
+	u, err := buildUpstreamURL(s.cfg.Provider.BaseURL, "/api/user/web/current-user", "")
+	if err != nil {
+		return "", err
+	}
+
+	client := resty.New().
+		SetTimeout(s.cfg.Provider.Timeout()).
+		SetCookieJar(jar).
+		SetRetryCount(s.cfg.Provider.Retry.Count).
+		SetRetryWaitTime(s.cfg.Provider.Retry.Wait()).
+		SetRetryMaxWaitTime(s.cfg.Provider.Retry.MaxWait()).
+		AddRetryCondition(func(r *resty.Response, err error) bool {
+			if err != nil {
+				return true
+			}
+			if r == nil {
+				return true
+			}
+			return r.StatusCode() >= 500
+		})
+
+	proxy := strings.TrimSpace(s.cfg.Proxy.Global)
+	if proxy != "" {
+		client.SetProxy(proxy)
+	}
+
+	ua := strings.TrimSpace(userAgent)
+	if ua == "" {
+		ua = strings.TrimSpace(s.cfg.Provider.UserAgent)
+	}
+	if ua != "" {
+		client.SetHeader("User-Agent", ua)
+	}
+
+	client.SetHeader("Authorization", "Bearer "+strings.TrimSpace(token))
+	client.SetHeader("token", strings.TrimSpace(token))
+	client.SetHeader("x-token", strings.TrimSpace(token))
+
+	resp, err := client.R().SetContext(ctx).Get(u.String())
+	if err != nil {
+		return "", err
+	}
+	if resp.StatusCode() >= 400 {
+		return "", fmt.Errorf("current-user status %d", resp.StatusCode())
+	}
+	return extractCurrentUserUsername(resp.Body()), nil
+}
+
+func extractCurrentUserUsername(body []byte) string {
+	if len(body) == 0 {
+		return ""
+	}
+	var m map[string]any
+	if err := json.Unmarshal(body, &m); err != nil {
+		return ""
+	}
+	if s, ok := m["success"].(bool); ok && !s {
+		return ""
+	}
+	data, _ := m["data"].(map[string]any)
+	if data == nil {
+		return ""
+	}
+	switch v := data["username"].(type) {
+	case string:
+		return strings.TrimSpace(v)
+	case float64:
+		if v == float64(int64(v)) {
+			return fmt.Sprint(int64(v))
+		}
+		return fmt.Sprint(v)
+	default:
+		return ""
+	}
 }
 
 func extractLoginToken(body []byte) (string, error) {
