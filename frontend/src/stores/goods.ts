@@ -179,11 +179,11 @@ export const useGoodsStore = defineStore('goods', {
         this.addressesLoading = false
       }
     },
-    async loadCategories() {
+    async loadCategories(token: string) {
       if (!this.locationReady) throw new Error('缺少经纬度，请先选择收货地址')
       this.categoriesLoading = true
       try {
-        const data = await apiFetchShopCategoryTree({
+        const data = await apiFetchShopCategoryTree(token, {
           frontCategoryId: ROOT_FRONT_CATEGORY_ID,
           longitude: this.longitude as number,
           latitude: this.latitude as number,
@@ -198,14 +198,14 @@ export const useGoodsStore = defineStore('goods', {
         this.categoriesLoading = false
       }
     },
-    async loadGoodsByCategory(frontCategoryId: number, pageNo = 1, pageSize = 500) {
+    async loadGoodsByCategory(token: string, frontCategoryId: number, pageNo = 1, pageSize = 500) {
       if (!this.locationReady) throw new Error('缺少经纬度，请先选择收货地址')
       const cid = Number(frontCategoryId)
       if (!Number.isFinite(cid)) throw new Error('分类ID不正确')
 
       this.goodsLoading = true
       try {
-        const groups = await apiSearchStoreSkuByCategory({
+        const groups = await apiSearchStoreSkuByCategory(token, {
           pageNo,
           pageSize,
           frontCategoryId: cid,
@@ -225,4 +225,3 @@ export const useGoodsStore = defineStore('goods', {
     },
   },
 })
-

@@ -46,7 +46,7 @@ async function importTargets() {
 
 async function start() {
   if (accounts.value.length === 0) {
-    ElMessage.warning('请先添加账号（后端要求至少 1 个账号）')
+    ElMessage.warning('请先添加账号')
     return
   }
   if (enabledCount.value === 0) {
@@ -77,7 +77,7 @@ function onRushAtChange(row: Task, value: Date | null) {
 
 <template>
   <div class="page">
-    <el-card shadow="never" header="抢购工作台（后端执行）">
+    <el-card shadow="never" header="抢购工作台">
       <div class="toolbar">
         <div style="color: #606266">
           当前目标任务：<b>{{ tasks.length }}</b>，启用：<b>{{ enabledCount }}</b>，引擎状态：
@@ -217,9 +217,7 @@ function onRushAtChange(row: Task, value: Date | null) {
         </el-table-column>
       </el-table>
 
-      <div v-if="tasks.length === 0" style="padding: 8px 0; color: #909399">
-        暂无目标任务：可在“商品列表”加入目标清单后，点击“从商品目标清单导入”。
-      </div>
+      <div v-if="tasks.length === 0" style="padding: 8px 0; color: #909399">暂无目标任务</div>
     </el-card>
   </div>
 </template>

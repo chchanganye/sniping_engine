@@ -27,6 +27,16 @@ go run ./cmd/server -config ./config.yaml
 - WS 地址：`ws://127.0.0.1:8090/ws`
 - 收到的消息为 JSON，`type=log` 或 `type=task_state`
 
+## REST API（供前端调用）
+
+- 账号：`GET/POST/DELETE /api/v1/accounts`
+- 目标清单：`GET/POST/DELETE /api/v1/targets`
+- 引擎：`POST /api/v1/engine/start`、`POST /api/v1/engine/stop`、`GET /api/v1/engine/state`
+- 邮件通知：`GET/POST /api/v1/settings/email`、`POST /api/v1/settings/email/test`
+- 上游 API 代理（保持原始 `/api/...` 路径与 payload，不在前端直连第三方）：
+  - 任何非 `/api/v1/*` 的请求会由后端转发到 `provider.baseURL`。
+  - 代理请求需要带 `Authorization: Bearer <token>`（或 `token/x-token`），后端用它匹配账号并保持 Cookie/UA/Proxy 一致。
+
 ## 目录结构
 
 - `cmd/server`：HTTP + WS 服务入口
@@ -39,4 +49,3 @@ go run ./cmd/server -config ./config.yaml
 - `internal/provider/standard`：Resty 模板 Provider（指向 mock）
 - `internal/engine`：TaskEngine（并发/限流/任务执行）
 - `internal/httpapi`：REST/WS 路由与处理器
-

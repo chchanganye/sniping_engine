@@ -91,9 +91,6 @@ async function remove(row: Account) {
   <div class="page">
     <el-card shadow="never" header="账号管理">
       <div class="toolbar">
-        <div style="color: #909399">
-          账号信息已持久化到后端 SQLite；前端只负责配置与监控。
-        </div>
         <el-space :size="8" wrap>
           <el-button :icon="Refresh" :loading="loading" @click="accountsStore.refresh()">刷新</el-button>
           <el-button type="primary" :icon="Plus" @click="openAdd">新增账号</el-button>
@@ -137,10 +134,10 @@ async function remove(row: Account) {
           <el-input v-model="form.mobile" placeholder="请输入手机号" autocomplete="off" />
         </el-form-item>
         <el-form-item label="Token">
-          <el-input v-model="form.token" placeholder="可选：用于后续真实登录态" autocomplete="off" />
+          <el-input v-model="form.token" placeholder="可选" autocomplete="off" />
         </el-form-item>
         <el-form-item label="独立代理">
-          <el-input v-model="form.proxy" placeholder="可选：如 http://1.2.3.4:7897" autocomplete="off" />
+          <el-input v-model="form.proxy" placeholder="可选" autocomplete="off" />
         </el-form-item>
         <el-form-item label="UserAgent">
           <el-input v-model="form.userAgent" placeholder="可选" autocomplete="off" />
@@ -166,8 +163,7 @@ async function remove(row: Account) {
 .toolbar {
   display: flex;
   align-items: center;
-  justify-content: space-between;
+  justify-content: flex-end;
   gap: 12px;
 }
 </style>
-

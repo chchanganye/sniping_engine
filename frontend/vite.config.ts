@@ -13,7 +13,7 @@ export default defineConfig({
   server: {
     proxy: {
       // Go backend (dev)
-      '/api/v1': {
+      '/api': {
         target: 'http://127.0.0.1:8090',
         changeOrigin: true,
       },
@@ -21,23 +21,6 @@ export default defineConfig({
         target: 'ws://127.0.0.1:8090',
         ws: true,
         changeOrigin: true,
-      },
-      '/api': {
-        target: 'https://m.4008117117.com',
-        changeOrigin: true,
-        secure: true,
-        configure: (proxy) => {
-          proxy.on('proxyRes', (proxyRes) => {
-            const setCookie = proxyRes.headers['set-cookie']
-            if (!setCookie) return
-            const cookies = Array.isArray(setCookie) ? setCookie : [String(setCookie)]
-            proxyRes.headers['set-cookie'] = cookies.map((cookie) => {
-              return cookie
-                .replace(/;\s*Secure/gi, '')
-                .replace(/;\s*Domain=[^;]+/gi, '')
-            })
-          })
-        },
       },
     },
   },

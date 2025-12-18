@@ -45,6 +45,12 @@ const router = createRouter({
           component: () => import('@/pages/logs/Logs.vue'),
           meta: { title: '运行日志' },
         },
+        {
+          path: '/settings',
+          name: 'settings',
+          component: () => import('@/pages/settings/Settings.vue'),
+          meta: { title: '通知设置' },
+        },
       ],
     },
     { path: '/:pathMatch(.*)*', redirect: '/dashboard' },
@@ -52,4 +58,3 @@ const router = createRouter({
 })
 
 export default router
-

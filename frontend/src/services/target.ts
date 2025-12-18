@@ -24,22 +24,27 @@ function extractApiErrorMessage(error: unknown, fallback: string): string {
   return fallback
 }
 
+function tokenHeaders(token: string) {
+  const t = token?.trim()
+  if (!t) throw new Error('缺少 token')
+  return {
+    Authorization: `Bearer ${t}`,
+    token: t,
+    'x-token': t,
+  }
+}
+
 export async function apiListShippingAddresses(
   token: string,
   params?: { app?: string; isAllCover?: number | string | boolean },
 ): Promise<ShippingAddress[]> {
-  if (!token) throw new Error('缺少 token')
   try {
     const resp = await http.get<ApiEnvelope<ShippingAddress[]>>('/api/user/web/shipping-address/self/list-all', {
       params: {
         app: params?.app ?? 'o2o',
         isAllCover: params?.isAllCover ?? 1,
       },
-      headers: {
-        Authorization: `Bearer ${token}`,
-        token,
-        'x-token': token,
-      },
+      headers: tokenHeaders(token),
     })
     if ((resp.data as any)?.error) throw new Error(String((resp.data as any).error))
     if (!resp.data?.success) throw new Error(resp.data?.message || '获取收货地址失败')
@@ -49,12 +54,10 @@ export async function apiListShippingAddresses(
   }
 }
 
-export async function apiFetchShopCategoryTree(params: {
-  frontCategoryId: number
-  longitude: number
-  latitude: number
-  isFinish?: boolean
-}): Promise<ShopCategoryNode[]> {
+export async function apiFetchShopCategoryTree(
+  token: string,
+  params: { frontCategoryId: number; longitude: number; latitude: number; isFinish?: boolean },
+): Promise<ShopCategoryNode[]> {
   try {
     const resp = await http.get<ApiEnvelope<ShopCategoryNode[]>>('/api/item/shop-category/tree', {
       params: {
@@ -63,6 +66,7 @@ export async function apiFetchShopCategoryTree(params: {
         latitude: params.latitude,
         isFinish: params.isFinish ?? true,
       },
+      headers: tokenHeaders(token),
     })
     if ((resp.data as any)?.error) throw new Error(String((resp.data as any).error))
     if (!resp.data?.success) throw new Error(resp.data?.message || '获取分类失败')
@@ -72,28 +76,22 @@ export async function apiFetchShopCategoryTree(params: {
   }
 }
 
-export async function apiSearchStoreSkuByCategory(params: {
-  pageNo: number
-  pageSize: number
-  frontCategoryId: number
-  longitude: number
-  latitude: number
-  isFinish?: boolean
-}): Promise<StoreSkuCategoryGroup[]> {
+export async function apiSearchStoreSkuByCategory(
+  token: string,
+  params: { pageNo: number; pageSize: number; frontCategoryId: number; longitude: number; latitude: number; isFinish?: boolean },
+): Promise<StoreSkuCategoryGroup[]> {
   try {
-    const resp = await http.get<ApiEnvelope<StoreSkuCategoryGroup[]>>(
-      '/api/item/store/item/searchStoreSkuByCategory',
-      {
-        params: {
-          pageNo: params.pageNo,
-          pageSize: params.pageSize,
-          frontCategoryId: params.frontCategoryId,
-          longitude: params.longitude,
-          latitude: params.latitude,
-          isFinish: params.isFinish ?? true,
-        },
+    const resp = await http.get<ApiEnvelope<StoreSkuCategoryGroup[]>>('/api/item/store/item/searchStoreSkuByCategory', {
+      params: {
+        pageNo: params.pageNo,
+        pageSize: params.pageSize,
+        frontCategoryId: params.frontCategoryId,
+        longitude: params.longitude,
+        latitude: params.latitude,
+        isFinish: params.isFinish ?? true,
       },
-    )
+      headers: tokenHeaders(token),
+    })
     if ((resp.data as any)?.error) throw new Error(String((resp.data as any).error))
     if (!resp.data?.success) throw new Error(resp.data?.message || '获取分类商品失败')
     return Array.isArray(resp.data.data) ? resp.data.data : []

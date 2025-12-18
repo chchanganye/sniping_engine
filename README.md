@@ -23,3 +23,6 @@ go run ./cmd/mock
 go run ./cmd/server -config ./config.yaml
 ```
 
+### 通知设置
+
+- 前端「通知设置」页面：配置 SMTP 后，抢购成功会自动发邮件（由 Go 后端发送）。

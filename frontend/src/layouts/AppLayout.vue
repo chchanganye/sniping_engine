@@ -1,7 +1,7 @@
 <script setup lang="ts">
 import { computed, onMounted, ref } from 'vue'
 import { useRoute } from 'vue-router'
-import { Document, Fold, Goods, Monitor, Operation, User, Expand } from '@element-plus/icons-vue'
+import { Document, Fold, Goods, Monitor, Operation, User, Expand, Setting } from '@element-plus/icons-vue'
 import { storeToRefs } from 'pinia'
 import { useAccountsStore } from '@/stores/accounts'
 import { useTasksStore } from '@/stores/tasks'
@@ -32,6 +32,7 @@ const menuItems = [
   { path: '/goods', title: '商品列表', icon: Goods },
   { path: '/tasks', title: '抢购工作台', icon: Operation },
   { path: '/logs', title: '运行日志', icon: Document },
+  { path: '/settings', title: '通知设置', icon: Setting },
 ]
 </script>
 
@@ -142,4 +143,3 @@ const menuItems = [
   padding: 14px;
 }
 </style>
-

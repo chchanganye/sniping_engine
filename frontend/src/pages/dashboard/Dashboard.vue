@@ -36,13 +36,6 @@ function formatTime(value?: string) {
 
 <template>
   <div class="page">
-    <el-alert
-      title="前端只负责配置与监控；任务执行由 Go 后端引擎负责。"
-      type="info"
-      :closable="false"
-      show-icon
-    />
-
     <el-row :gutter="12" style="margin-top: 12px">
       <el-col :xs="12" :sm="6">
         <el-card shadow="never">
@@ -137,12 +130,9 @@ function formatTime(value?: string) {
             <el-table-column prop="updatedAt" label="更新时间" width="170" show-overflow-tooltip />
             <el-table-column prop="lastError" label="最新错误" min-width="220" show-overflow-tooltip />
           </el-table>
-          <div v-if="recentTasks.length === 0" style="padding: 8px 0; color: #909399">
-            还没有任务：可到“抢购工作台”导入目标并配置任务。
-          </div>
+          <div v-if="recentTasks.length === 0" style="padding: 8px 0; color: #909399">暂无任务</div>
         </el-card>
       </el-col>
     </el-row>
   </div>
 </template>
-

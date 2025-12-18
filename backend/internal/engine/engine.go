@@ -12,6 +12,7 @@ import (
 	"sniping_engine/internal/config"
 	"sniping_engine/internal/logbus"
 	"sniping_engine/internal/model"
+	"sniping_engine/internal/notify"
 	"sniping_engine/internal/provider"
 	"sniping_engine/internal/store/sqlite"
 )
@@ -22,12 +23,14 @@ type Options struct {
 	Bus      *logbus.Bus
 	Limits   config.LimitsConfig
 	Task     config.TaskConfig
+	Notifier notify.Notifier
 }
 
 type Engine struct {
 	store    *sqlite.Store
 	provider provider.Provider
 	bus      *logbus.Bus
+	notifier notify.Notifier
 
 	limits config.LimitsConfig
 	task   config.TaskConfig
@@ -68,6 +71,7 @@ func New(opts Options) *Engine {
 		store:         opts.Store,
 		provider:      opts.Provider,
 		bus:           opts.Bus,
+		notifier:      opts.Notifier,
 		limits:        opts.Limits,
 		task:          opts.Task,
 		states:        make(map[string]*model.TaskState),
@@ -237,6 +241,12 @@ func (e *Engine) attemptOnce(ctx context.Context, target model.Target) {
 	if acc.ID == "" {
 		return
 	}
+	// Refresh latest account snapshot to keep cookies/token/proxy/UA consistent with browsing sessions.
+	if e.store != nil {
+		if latest, err := e.store.GetAccount(ctx, acc.ID); err == nil {
+			acc = latest
+		}
+	}
 
 	e.mu.Lock()
 	st := e.states[target.ID]
@@ -314,6 +324,22 @@ func (e *Engine) attemptOnce(ctx context.Context, target model.Target) {
 				"accountId": acc.ID,
 				"orderId":   res.OrderID,
 				"traceId":   res.TraceID,
+			})
+		}
+		if e.notifier != nil {
+			e.notifier.NotifyOrderCreated(ctx, notify.OrderCreatedEvent{
+				At:         time.Now().UnixMilli(),
+				AccountID:  acc.ID,
+				Mobile:     acc.Mobile,
+				TargetID:   target.ID,
+				TargetName: target.Name,
+				Mode:       string(target.Mode),
+				ItemID:     target.ItemID,
+				SKUID:      target.SKUID,
+				ShopID:     target.ShopID,
+				Quantity:   target.PerOrderQty,
+				OrderID:    res.OrderID,
+				TraceID:    res.TraceID,
 			})
 		}
 	}
@@ -415,4 +441,3 @@ func sleepUntil(ctx context.Context, t time.Time) bool {
 		return false
 	}
 }
-

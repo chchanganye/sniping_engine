@@ -55,7 +55,7 @@ function addressLabel(a: ShippingAddress) {
 async function refreshAddresses() {
   const token = currentAccount.value?.token
   if (!token) {
-    ElMessage.warning('请先在「账号管理」配置 Token（或先完成后端登录）')
+    ElMessage.warning('请先在「账号管理」配置 Token')
     return
   }
   try {
@@ -66,16 +66,20 @@ async function refreshAddresses() {
 }
 
 async function refreshCategories() {
+  const token = currentAccount.value?.token
+  if (!token) return
   try {
-    await goodsStore.loadCategories()
+    await goodsStore.loadCategories(token)
   } catch (e) {
     ElMessage.error(e instanceof Error ? e.message : '获取分类失败')
   }
 }
 
 async function loadGoodsByCategory(frontCategoryId: number) {
+  const token = currentAccount.value?.token
+  if (!token) return
   try {
-    await goodsStore.loadGoodsByCategory(frontCategoryId, 1, 500)
+    await goodsStore.loadGoodsByCategory(token, frontCategoryId, 1, 500)
   } catch (e) {
     ElMessage.error(e instanceof Error ? e.message : '获取分类商品失败')
   }
@@ -225,7 +229,7 @@ onMounted(async () => {
           </template>
 
           <div v-if="accountOptions.length === 0" style="color: #909399">
-            暂无可用账号：请先到「账号管理」添加账号并配置 Token（或先完成后端登录），再回来加载地址/分类/商品。
+            暂无可用账号，请先到「账号管理」添加账号并配置 Token。
           </div>
         </el-card>
       </el-col>
@@ -244,7 +248,7 @@ onMounted(async () => {
             @node-click="onTreeNodeClick"
           />
           <div v-if="!categoriesLoading && categories.length === 0" style="padding: 8px 0; color: #909399">
-            还没有分类数据：请先选择地址，系统会自动加载分类。
+            暂无分类数据
           </div>
         </el-card>
       </el-col>
@@ -342,17 +346,14 @@ onMounted(async () => {
           </div>
 
           <div v-if="!goodsLoading && skuGroups.length === 0" style="padding: 8px 0; color: #909399">
-            暂无商品：请在左侧选择一个分类加载商品。
+            暂无商品
           </div>
         </el-card>
       </el-col>
     </el-row>
 
     <el-drawer v-model="targetListVisible" :title="`目标清单（${targetGoodsCount}）`" size="460px">
-      <div style="display: flex; align-items: center; justify-content: space-between; gap: 12px; margin-bottom: 10px">
-        <div style="color: #909399">
-          提示：这里是你想抢购的“目标商品清单”，用于集中查看/移除。
-        </div>
+      <div style="display: flex; align-items: center; justify-content: flex-end; gap: 12px; margin-bottom: 10px">
         <el-button size="small" type="danger" plain :disabled="targetGoodsCount === 0" @click="clearTargetList">
           清空
         </el-button>
@@ -363,7 +364,7 @@ onMounted(async () => {
         row-key="id"
         size="small"
         style="width: 100%"
-        empty-text="暂无目标商品，请在商品列表里点击「加入清单」。"
+        empty-text="暂无目标商品"
       >
         <el-table-column label="商品" min-width="240">
           <template #default="{ row }">

@@ -44,6 +44,12 @@ export interface EngineState {
   tasks: EngineTaskState[]
 }
 
+export interface EmailSettings {
+  enabled: boolean
+  email: string
+  authCode?: string
+}
+
 type DataEnvelope<T> = { data: T }
 
 export async function beListAccounts(): Promise<BackendAccount[]> {
@@ -87,3 +93,16 @@ export async function beEngineState(): Promise<EngineState> {
   return resp.data.data
 }
 
+export async function beGetEmailSettings(): Promise<EmailSettings> {
+  const resp = await http.get<DataEnvelope<EmailSettings>>('/api/v1/settings/email')
+  return resp.data.data
+}
+
+export async function beSaveEmailSettings(payload: Partial<EmailSettings>): Promise<EmailSettings> {
+  const resp = await http.post<DataEnvelope<EmailSettings>>('/api/v1/settings/email', payload)
+  return resp.data.data
+}
+
+export async function beTestEmail(): Promise<void> {
+  await http.post('/api/v1/settings/email/test')
+}

@@ -2,10 +2,12 @@ package standard
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"net/http/cookiejar"
 	"net/url"
+	"strconv"
 
 	"github.com/go-resty/resty/v2"
 
@@ -33,6 +35,14 @@ func New(cfg config.ProviderConfig, proxyCfg config.ProxyConfig, bus *logbus.Bus
 }
 
 func (p *StandardProvider) Name() string { return "standard" }
+
+type apiEnvelope[T any] struct {
+	Success bool   `json:"success"`
+	Error   string `json:"error,omitempty"`
+	Message string `json:"message,omitempty"`
+	Code    any    `json:"code,omitempty"`
+	Data    T      `json:"data"`
+}
 
 type loginBySMSReq struct {
 	Mobile  string `json:"mobile"`
@@ -192,6 +202,128 @@ func (p *StandardProvider) CreateOrder(ctx context.Context, account model.Accoun
 	}, updated, nil
 }
 
+func (p *StandardProvider) GetShippingAddresses(ctx context.Context, account model.Account, params provider.ShippingAddressParams) (json.RawMessage, model.Account, error) {
+	client, jar, err := p.newClient(account)
+	if err != nil {
+		return nil, model.Account{}, err
+	}
+
+	app := params.App
+	if app == "" {
+		app = "o2o"
+	}
+
+	var resp apiEnvelope[json.RawMessage]
+	_, err = client.R().
+		SetContext(ctx).
+		SetQueryParams(map[string]string{
+			"app":       app,
+			"isAllCover": strconv.Itoa(params.IsAllCover),
+		}).
+		SetResult(&resp).
+		Get("/api/user/web/shipping-address/self/list-all")
+	if err != nil {
+		return nil, model.Account{}, err
+	}
+	if !resp.Success {
+		msg := resp.Error
+		if msg == "" {
+			msg = resp.Message
+		}
+		if msg == "" {
+			msg = "get shipping addresses failed"
+		}
+		return nil, model.Account{}, errors.New(msg)
+	}
+
+	updated := account
+	updated.Cookies = p.exportCookies(jar)
+	return resp.Data, updated, nil
+}
+
+func (p *StandardProvider) GetCategoryTree(ctx context.Context, account model.Account, params provider.CategoryTreeParams) (json.RawMessage, model.Account, error) {
+	client, jar, err := p.newClient(account)
+	if err != nil {
+		return nil, model.Account{}, err
+	}
+
+	var resp apiEnvelope[json.RawMessage]
+	_, err = client.R().
+		SetContext(ctx).
+		SetQueryParams(map[string]string{
+			"frontCategoryId": strconv.FormatInt(params.FrontCategoryID, 10),
+			"longitude":       strconv.FormatFloat(params.Longitude, 'f', -1, 64),
+			"latitude":        strconv.FormatFloat(params.Latitude, 'f', -1, 64),
+			"isFinish":        strconv.FormatBool(params.IsFinish),
+		}).
+		SetResult(&resp).
+		Get("/api/item/shop-category/tree")
+	if err != nil {
+		return nil, model.Account{}, err
+	}
+	if !resp.Success {
+		msg := resp.Error
+		if msg == "" {
+			msg = resp.Message
+		}
+		if msg == "" {
+			msg = "get category tree failed"
+		}
+		return nil, model.Account{}, errors.New(msg)
+	}
+
+	updated := account
+	updated.Cookies = p.exportCookies(jar)
+	return resp.Data, updated, nil
+}
+
+func (p *StandardProvider) GetStoreSkuByCategory(ctx context.Context, account model.Account, params provider.StoreSkuByCategoryParams) (json.RawMessage, model.Account, error) {
+	client, jar, err := p.newClient(account)
+	if err != nil {
+		return nil, model.Account{}, err
+	}
+
+	pageNo := params.PageNo
+	if pageNo <= 0 {
+		pageNo = 1
+	}
+	pageSize := params.PageSize
+	if pageSize <= 0 {
+		pageSize = 20
+	}
+
+	var resp apiEnvelope[json.RawMessage]
+	_, err = client.R().
+		SetContext(ctx).
+		SetQueryParams(map[string]string{
+			"pageNo":          strconv.Itoa(pageNo),
+			"pageSize":        strconv.Itoa(pageSize),
+			"frontCategoryId": strconv.FormatInt(params.FrontCategoryID, 10),
+			"longitude":       strconv.FormatFloat(params.Longitude, 'f', -1, 64),
+			"latitude":        strconv.FormatFloat(params.Latitude, 'f', -1, 64),
+			"isFinish":        strconv.FormatBool(params.IsFinish),
+		}).
+		SetResult(&resp).
+		Get("/api/item/store/item/searchStoreSkuByCategory")
+	if err != nil {
+		return nil, model.Account{}, err
+	}
+	if !resp.Success {
+		msg := resp.Error
+		if msg == "" {
+			msg = resp.Message
+		}
+		if msg == "" {
+			msg = "get store sku by category failed"
+		}
+		return nil, model.Account{}, errors.New(msg)
+	}
+
+	updated := account
+	updated.Cookies = p.exportCookies(jar)
+	return resp.Data, updated, nil
+}
+
 func (p *StandardProvider) newClient(account model.Account) (*resty.Client, *cookiejar.Jar, error) {
 	jar, err := cookiejar.New(nil)
 	if err != nil {
@@ -231,6 +363,8 @@ func (p *StandardProvider) newClient(account model.Account) (*resty.Client, *coo
 	client.SetHeader("User-Agent", ua)
 	if account.Token != "" {
 		client.SetHeader("Authorization", "Bearer "+account.Token)
+		client.SetHeader("token", account.Token)
+		client.SetHeader("x-token", account.Token)
 	}
 
 	client.OnBeforeRequest(func(_ *resty.Client, req *resty.Request) error {
@@ -267,4 +401,3 @@ func (p *StandardProvider) exportCookies(jar *cookiejar.Jar) []model.CookieJarEn
 		{URL: u.String(), Cookies: model.CookiesFromHTTP(cookies)},
 	}
 }
-

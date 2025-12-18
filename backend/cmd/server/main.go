@@ -14,6 +14,7 @@ import (
 	"sniping_engine/internal/engine"
 	"sniping_engine/internal/httpapi"
 	"sniping_engine/internal/logbus"
+	"sniping_engine/internal/notify"
 	"sniping_engine/internal/provider/standard"
 	"sniping_engine/internal/store/sqlite"
 )
@@ -38,19 +39,22 @@ func main() {
 	defer store.Close()
 
 	prov := standard.New(cfg.Provider, cfg.Proxy, bus)
+	emailNotifier := notify.NewEmailNotifier(store, bus)
 	eng := engine.New(engine.Options{
 		Store:    store,
 		Provider: prov,
 		Bus:      bus,
 		Limits:   cfg.Limits,
 		Task:     cfg.Task,
+		Notifier: emailNotifier,
 	})
 
 	api := httpapi.New(httpapi.Options{
-		Cfg:    cfg,
-		Bus:    bus,
-		Store:  store,
-		Engine: eng,
+		Cfg:      cfg,
+		Bus:      bus,
+		Store:    store,
+		Engine:   eng,
+		Notifier: emailNotifier,
 	})
 
 	server := &http.Server{
@@ -80,7 +84,7 @@ func main() {
 	defer cancel()
 
 	_ = eng.StopAll(shutdownCtx)
+	_ = emailNotifier.Close(shutdownCtx)
 	_ = server.Shutdown(shutdownCtx)
 	bus.Log("info", "server stopped", nil)
 }
-

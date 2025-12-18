@@ -33,6 +33,11 @@ func (s *Store) migrate(ctx context.Context) error {
 			created_at INTEGER NOT NULL,
 			updated_at INTEGER NOT NULL
 		);`,
+		`CREATE TABLE IF NOT EXISTS settings (
+			key TEXT PRIMARY KEY,
+			value_json TEXT NOT NULL DEFAULT '{}',
+			updated_at INTEGER NOT NULL
+		);`,
 	}
 
 	for _, stmt := range stmts {
@@ -42,4 +47,3 @@ func (s *Store) migrate(ctx context.Context) error {
 	}
 	return nil
 }
-

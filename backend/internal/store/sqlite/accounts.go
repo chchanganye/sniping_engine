@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"time"
 
 	"github.com/google/uuid"
@@ -120,6 +121,45 @@ func (s *Store) GetAccount(ctx context.Context, id string) (model.Account, error
 	}, nil
 }
 
+func (s *Store) GetAccountByToken(ctx context.Context, token string) (model.Account, error) {
+	if token == "" {
+		return model.Account{}, errors.New("token is required")
+	}
+	var row struct {
+		id        string
+		mobile    string
+		token     string
+		userAgent string
+		deviceID  string
+		uuid      string
+		proxy     string
+		cookies   string
+		createdAt int64
+		updatedAt int64
+	}
+	err := s.db.QueryRowContext(ctx, `
+		SELECT id, mobile, token, user_agent, device_id, uuid, proxy, cookies_json, created_at, updated_at
+		FROM accounts WHERE token = ? ORDER BY updated_at DESC LIMIT 1
+	`, token).Scan(&row.id, &row.mobile, &row.token, &row.userAgent, &row.deviceID, &row.uuid, &row.proxy, &row.cookies, &row.createdAt, &row.updatedAt)
+	if err != nil {
+		return model.Account{}, fmt.Errorf("get account by token: %w", err)
+	}
+	var cookies []model.CookieJarEntry
+	_ = json.Unmarshal([]byte(row.cookies), &cookies)
+	return model.Account{
+		ID:        row.id,
+		Mobile:    row.mobile,
+		Token:     row.token,
+		UserAgent: row.userAgent,
+		DeviceID:  row.deviceID,
+		UUID:      row.uuid,
+		Proxy:     row.proxy,
+		Cookies:   cookies,
+		CreatedAt: time.UnixMilli(row.createdAt),
+		UpdatedAt: time.UnixMilli(row.updatedAt),
+	}, nil
+}
+
 func (s *Store) ListAccounts(ctx context.Context) ([]model.Account, error) {
 	rows, err := s.db.QueryContext(ctx, `
 		SELECT id, mobile, token, user_agent, device_id, uuid, proxy, cookies_json, created_at, updated_at
@@ -172,4 +212,3 @@ func (s *Store) DeleteAccount(ctx context.Context, id string) error {
 	_, err := s.db.ExecContext(ctx, `DELETE FROM accounts WHERE id = ?`, id)
 	return err
 }
-
