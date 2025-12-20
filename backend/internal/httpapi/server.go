@@ -65,6 +65,8 @@ func (s *Server) Handler() http.Handler {
 	api.HandleFunc("/api/v1/engine/start", s.handleEngineStart)
 	api.HandleFunc("/api/v1/engine/stop", s.handleEngineStop)
 	api.HandleFunc("/api/v1/engine/state", s.handleEngineState)
+	api.HandleFunc("/api/v1/engine/preflight", s.handleEnginePreflight)
+	api.HandleFunc("/api/v1/engine/test-buy", s.handleEngineTestBuy)
 	api.HandleFunc("/api/v1/settings/email", s.handleEmailSettings)
 	api.HandleFunc("/api/v1/settings/email/test", s.handleEmailTest)
 	api.HandleFunc("/api/", s.handleUpstreamProxy)
@@ -87,12 +89,77 @@ func (s *Server) handleAccounts(w http.ResponseWriter, r *http.Request) {
 		}
 		writeJSON(w, http.StatusOK, map[string]any{"data": accounts})
 	case http.MethodPost:
-		var body model.Account
+		type accountUpsertPayload struct {
+			ID          string  `json:"id,omitempty"`
+			Username    *string `json:"username,omitempty"`
+			Mobile      string  `json:"mobile"`
+			Token       *string `json:"token,omitempty"`
+			UserAgent   *string `json:"userAgent,omitempty"`
+			DeviceID    *string `json:"deviceId,omitempty"`
+			UUID        *string `json:"uuid,omitempty"`
+			Proxy       *string `json:"proxy,omitempty"`
+			AddressID   *int64  `json:"addressId,omitempty"`
+			DivisionIDs *string `json:"divisionIds,omitempty"`
+		}
+
+		var body accountUpsertPayload
 		if err := readJSON(r, &body); err != nil {
 			writeJSON(w, http.StatusBadRequest, map[string]any{"error": err.Error()})
 			return
 		}
-		acc, err := s.store.UpsertAccount(r.Context(), body)
+		mobile := strings.TrimSpace(body.Mobile)
+		if mobile == "" {
+			writeJSON(w, http.StatusBadRequest, map[string]any{"error": "mobile is required"})
+			return
+		}
+
+		var current model.Account
+		if strings.TrimSpace(body.ID) != "" {
+			if found, err := s.store.GetAccount(r.Context(), strings.TrimSpace(body.ID)); err == nil {
+				current = found
+			}
+		}
+		if strings.TrimSpace(current.ID) == "" {
+			if found, err := s.store.GetAccountByMobile(r.Context(), mobile); err == nil {
+				current = found
+			}
+		}
+
+		next := current
+		next.Mobile = mobile
+		if strings.TrimSpace(body.ID) != "" {
+			next.ID = strings.TrimSpace(body.ID)
+		}
+		if body.Username != nil {
+			next.Username = strings.TrimSpace(*body.Username)
+		}
+		if body.UserAgent != nil {
+			next.UserAgent = strings.TrimSpace(*body.UserAgent)
+		}
+		if body.DeviceID != nil {
+			next.DeviceID = strings.TrimSpace(*body.DeviceID)
+		}
+		if body.UUID != nil {
+			next.UUID = strings.TrimSpace(*body.UUID)
+		}
+		if body.Proxy != nil {
+			next.Proxy = strings.TrimSpace(*body.Proxy)
+		}
+		if body.AddressID != nil {
+			next.AddressID = *body.AddressID
+		}
+		if body.DivisionIDs != nil {
+			next.DivisionIDs = strings.TrimSpace(*body.DivisionIDs)
+		}
+		if body.Token != nil {
+			t := strings.TrimSpace(*body.Token)
+			next.Token = t
+			if t == "" {
+				next.Cookies = nil
+			}
+		}
+
+		acc, err := s.store.UpsertAccount(r.Context(), next)
 		if err != nil {
 			writeJSON(w, http.StatusBadRequest, map[string]any{"error": err.Error()})
 			return
@@ -124,12 +191,49 @@ func (s *Server) handleTargets(w http.ResponseWriter, r *http.Request) {
 		}
 		writeJSON(w, http.StatusOK, map[string]any{"data": targets})
 	case http.MethodPost:
-		var body model.Target
+		type targetUpsertPayload struct {
+			ID                 string           `json:"id"`
+			Name               string           `json:"name,omitempty"`
+			ImageURL           string           `json:"imageUrl,omitempty"`
+			ItemID             int64            `json:"itemId"`
+			SKUID              int64            `json:"skuId"`
+			ShopID             int64            `json:"shopId,omitempty"`
+			Mode               model.TargetMode `json:"mode"`
+			TargetQty          int              `json:"targetQty"`
+			PerOrderQty        int              `json:"perOrderQty"`
+			RushAtMs           int64            `json:"rushAtMs,omitempty"`
+			CaptchaVerifyParam *string          `json:"captchaVerifyParam,omitempty"`
+			Enabled            bool             `json:"enabled"`
+		}
+
+		var body targetUpsertPayload
 		if err := readJSON(r, &body); err != nil {
 			writeJSON(w, http.StatusBadRequest, map[string]any{"error": err.Error()})
 			return
 		}
-		t, err := s.store.UpsertTarget(r.Context(), body)
+
+		next := model.Target{
+			ID:          strings.TrimSpace(body.ID),
+			Name:        strings.TrimSpace(body.Name),
+			ImageURL:    strings.TrimSpace(body.ImageURL),
+			ItemID:      body.ItemID,
+			SKUID:       body.SKUID,
+			ShopID:      body.ShopID,
+			Mode:        body.Mode,
+			TargetQty:   body.TargetQty,
+			PerOrderQty: body.PerOrderQty,
+			RushAtMs:    body.RushAtMs,
+			Enabled:     body.Enabled,
+		}
+		if body.CaptchaVerifyParam != nil {
+			next.CaptchaVerifyParam = strings.TrimSpace(*body.CaptchaVerifyParam)
+		} else if next.ID != "" {
+			if current, err := s.store.GetTarget(r.Context(), next.ID); err == nil {
+				next.CaptchaVerifyParam = current.CaptchaVerifyParam
+			}
+		}
+
+		t, err := s.store.UpsertTarget(r.Context(), next)
 		if err != nil {
 			writeJSON(w, http.StatusBadRequest, map[string]any{"error": err.Error()})
 			return
@@ -187,6 +291,76 @@ func (s *Server) handleEngineState(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, map[string]any{"data": s.engine.State()})
 }
 
+type enginePreflightPayload struct {
+	TargetID string `json:"targetId"`
+}
+
+func (s *Server) handleEnginePreflight(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+	if s.engine == nil {
+		writeJSON(w, http.StatusServiceUnavailable, map[string]any{"error": "engine unavailable"})
+		return
+	}
+	var body enginePreflightPayload
+	if err := readJSON(r, &body); err != nil {
+		writeJSON(w, http.StatusBadRequest, map[string]any{"error": err.Error()})
+		return
+	}
+	if strings.TrimSpace(body.TargetID) == "" {
+		writeJSON(w, http.StatusBadRequest, map[string]any{"error": "targetId is required"})
+		return
+	}
+
+	ctx, cancel := context.WithTimeout(r.Context(), 30*time.Second)
+	defer cancel()
+
+	res, err := s.engine.PreflightOnce(ctx, strings.TrimSpace(body.TargetID))
+	if err != nil {
+		writeJSON(w, http.StatusBadRequest, map[string]any{"error": err.Error()})
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"data": res})
+}
+
+type engineTestBuyPayload struct {
+	TargetID           string `json:"targetId"`
+	CaptchaVerifyParam string `json:"captchaVerifyParam,omitempty"`
+	OpID               string `json:"opId,omitempty"`
+}
+
+func (s *Server) handleEngineTestBuy(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+	if s.engine == nil {
+		writeJSON(w, http.StatusServiceUnavailable, map[string]any{"error": "engine unavailable"})
+		return
+	}
+	var body engineTestBuyPayload
+	if err := readJSON(r, &body); err != nil {
+		writeJSON(w, http.StatusBadRequest, map[string]any{"error": err.Error()})
+		return
+	}
+	if strings.TrimSpace(body.TargetID) == "" {
+		writeJSON(w, http.StatusBadRequest, map[string]any{"error": "targetId is required"})
+		return
+	}
+
+	ctx, cancel := context.WithTimeout(r.Context(), 45*time.Second)
+	defer cancel()
+
+	res, err := s.engine.TestBuyOnce(ctx, strings.TrimSpace(body.TargetID), strings.TrimSpace(body.CaptchaVerifyParam), strings.TrimSpace(body.OpID))
+	if err != nil {
+		writeJSON(w, http.StatusBadRequest, map[string]any{"error": err.Error()})
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"data": res})
+}
+
 type emailSettingsPayload struct {
 	Enabled  *bool   `json:"enabled,omitempty"`
 	Email    *string `json:"email,omitempty"`
@@ -211,11 +385,7 @@ func (s *Server) handleEmailSettings(w http.ResponseWriter, r *http.Request) {
 			})
 			return
 		}
-		masked := val
-		if masked.AuthCode != "" {
-			masked.AuthCode = "******"
-		}
-		writeJSON(w, http.StatusOK, map[string]any{"data": masked})
+		writeJSON(w, http.StatusOK, map[string]any{"data": val})
 	case http.MethodPost:
 		var body emailSettingsPayload
 		if err := readJSON(r, &body); err != nil {
@@ -248,14 +418,15 @@ func (s *Server) handleEmailSettings(w http.ResponseWriter, r *http.Request) {
 			writeJSON(w, http.StatusInternalServerError, map[string]any{"error": err.Error()})
 			return
 		}
-		resp := saved
-		if resp.AuthCode != "" {
-			resp.AuthCode = "******"
-		}
-		writeJSON(w, http.StatusOK, map[string]any{"data": resp})
+		writeJSON(w, http.StatusOK, map[string]any{"data": saved})
 	default:
 		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
 	}
+}
+
+type emailTestPayload struct {
+	Email    string `json:"email,omitempty"`
+	AuthCode string `json:"authCode,omitempty"`
 }
 
 func (s *Server) handleEmailTest(w http.ResponseWriter, r *http.Request) {
@@ -263,24 +434,30 @@ func (s *Server) handleEmailTest(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
 		return
 	}
-	val, ok, err := s.store.GetEmailSettings(r.Context())
+	var body emailTestPayload
+	dec := json.NewDecoder(r.Body)
+	dec.DisallowUnknownFields()
+	if err := dec.Decode(&body); err != nil && !errors.Is(err, io.EOF) {
+		writeJSON(w, http.StatusBadRequest, map[string]any{"error": err.Error()})
+		return
+	}
+
+	val, _, err := s.store.GetEmailSettings(r.Context())
 	if err != nil {
 		writeJSON(w, http.StatusInternalServerError, map[string]any{"error": err.Error()})
 		return
 	}
-	if !ok || !val.Enabled {
-		writeJSON(w, http.StatusBadRequest, map[string]any{"error": "email is disabled"})
-		return
+	if strings.TrimSpace(body.Email) != "" {
+		val.Email = strings.TrimSpace(body.Email)
 	}
-	if strings.TrimSpace(val.Email) == "" || strings.TrimSpace(val.AuthCode) == "" {
-		writeJSON(w, http.StatusBadRequest, map[string]any{"error": "email/authCode is required"})
-		return
+	if strings.TrimSpace(body.AuthCode) != "" {
+		val.AuthCode = strings.TrimSpace(body.AuthCode)
 	}
-	if s.notif == nil {
-		writeJSON(w, http.StatusServiceUnavailable, map[string]any{"error": "notifier unavailable"})
-		return
-	}
-	s.notif.NotifyOrderCreated(r.Context(), notify.OrderCreatedEvent{
+
+	ctx, cancel := context.WithTimeout(r.Context(), 20*time.Second)
+	defer cancel()
+
+	if err := notify.SendOrderCreatedEmail(ctx, val, notify.OrderCreatedEvent{
 		At:         time.Now().UnixMilli(),
 		AccountID:  "test",
 		Mobile:     "test",
@@ -293,7 +470,10 @@ func (s *Server) handleEmailTest(w http.ResponseWriter, r *http.Request) {
 		Quantity:   1,
 		OrderID:    "TEST-ORDER-" + strconv.FormatInt(time.Now().Unix(), 10),
 		TraceID:    "test-trace",
-	})
+	}); err != nil {
+		writeJSON(w, http.StatusBadRequest, map[string]any{"error": err.Error()})
+		return
+	}
 	writeJSON(w, http.StatusOK, map[string]any{"ok": true})
 }
 

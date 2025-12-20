@@ -17,6 +17,8 @@ func (s *Store) migrate(ctx context.Context) error {
 			device_id TEXT NOT NULL DEFAULT '',
 			uuid TEXT NOT NULL DEFAULT '',
 			proxy TEXT NOT NULL DEFAULT '',
+			address_id INTEGER NOT NULL DEFAULT 0,
+			division_ids TEXT NOT NULL DEFAULT '',
 			cookies_json TEXT NOT NULL DEFAULT '[]',
 			created_at INTEGER NOT NULL,
 			updated_at INTEGER NOT NULL
@@ -32,6 +34,7 @@ func (s *Store) migrate(ctx context.Context) error {
 			target_qty INTEGER NOT NULL,
 			per_order_qty INTEGER NOT NULL,
 			rush_at_ms INTEGER NOT NULL DEFAULT 0,
+			captcha_verify_param TEXT NOT NULL DEFAULT '',
 			enabled INTEGER NOT NULL DEFAULT 1,
 			created_at INTEGER NOT NULL,
 			updated_at INTEGER NOT NULL
@@ -57,9 +60,27 @@ func (s *Store) migrate(ctx context.Context) error {
 		}
 	}
 
+	if _, err := s.db.ExecContext(ctx, `ALTER TABLE accounts ADD COLUMN address_id INTEGER NOT NULL DEFAULT 0`); err != nil {
+		if !strings.Contains(strings.ToLower(err.Error()), "duplicate") {
+			return fmt.Errorf("migrate accounts.address_id: %w", err)
+		}
+	}
+
+	if _, err := s.db.ExecContext(ctx, `ALTER TABLE accounts ADD COLUMN division_ids TEXT NOT NULL DEFAULT ''`); err != nil {
+		if !strings.Contains(strings.ToLower(err.Error()), "duplicate") {
+			return fmt.Errorf("migrate accounts.division_ids: %w", err)
+		}
+	}
+
 	if _, err := s.db.ExecContext(ctx, `ALTER TABLE targets ADD COLUMN image_url TEXT NOT NULL DEFAULT ''`); err != nil {
 		if !strings.Contains(strings.ToLower(err.Error()), "duplicate") {
 			return fmt.Errorf("migrate targets.image_url: %w", err)
+		}
+	}
+
+	if _, err := s.db.ExecContext(ctx, `ALTER TABLE targets ADD COLUMN captcha_verify_param TEXT NOT NULL DEFAULT ''`); err != nil {
+		if !strings.Contains(strings.ToLower(err.Error()), "duplicate") {
+			return fmt.Errorf("migrate targets.captcha_verify_param: %w", err)
 		}
 	}
 

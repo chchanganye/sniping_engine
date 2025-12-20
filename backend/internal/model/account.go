@@ -11,6 +11,8 @@ type Account struct {
 	DeviceID  string           `json:"deviceId,omitempty"`
 	UUID      string           `json:"uuid,omitempty"`
 	Proxy     string           `json:"proxy,omitempty"`
+	AddressID int64            `json:"addressId,omitempty"`
+	DivisionIDs string         `json:"divisionIds,omitempty"`
 	Cookies   []CookieJarEntry `json:"cookies,omitempty"`
 	CreatedAt time.Time        `json:"createdAt"`
 	UpdatedAt time.Time        `json:"updatedAt"`

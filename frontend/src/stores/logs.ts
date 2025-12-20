@@ -2,9 +2,11 @@ import { defineStore } from 'pinia'
 import type { LogEntry, LogLevel } from '@/types/core'
 import { uid } from '@/utils/id'
 import { useTasksStore } from '@/stores/tasks'
+import { useProgressStore, type ProgressEventPayload } from '@/stores/progress'
 
 type BusMessage =
   | { type: 'log'; time: number; data: { level: string; msg: string; fields?: Record<string, any> } }
+  | { type: 'progress'; time: number; data: ProgressEventPayload }
   | { type: 'task_state'; time: number; data: any }
   | { type: string; time: number; data: any }
 
@@ -25,8 +27,17 @@ function buildWsURL(path: string): string {
 function compactFields(fields?: Record<string, any>): string {
   if (!fields) return ''
   const picked: Record<string, any> = {}
-  for (const k of ['accountId', 'targetId', 'orderId', 'traceId', 'url', 'method', 'error']) {
+  for (const k of ['accountId', 'targetId', 'orderId', 'traceId', 'api', 'status', 'url', 'method', 'error']) {
     if (fields[k] != null) picked[k] = fields[k]
+  }
+  if (fields.body != null) {
+    try {
+      const raw = typeof fields.body === 'string' ? fields.body : JSON.stringify(fields.body)
+      const text = String(raw ?? '').trim()
+      if (text) picked.body = text.length > 800 ? text.slice(0, 800) + '...' : text
+    } catch {
+      // ignore
+    }
   }
   const keys = Object.keys(picked)
   if (keys.length === 0) return ''
@@ -64,6 +75,7 @@ export const useLogsStore = defineStore('logs', {
       if (this.connected || this.connecting) return
 
       const tasksStore = useTasksStore()
+      const progressStore = useProgressStore()
       this.connecting = true
       this.lastError = ''
 
@@ -88,6 +100,12 @@ export const useLogsStore = defineStore('logs', {
 
           if (msg.type === 'task_state') {
             tasksStore.applyTaskState(msg.data)
+            return
+          }
+
+          if (msg.type === 'progress') {
+            const time = typeof msg.time === 'number' ? msg.time : Date.now()
+            progressStore.addEvent(time, msg.data)
             return
           }
 
@@ -140,4 +158,3 @@ export const useLogsStore = defineStore('logs', {
     },
   },
 })
-

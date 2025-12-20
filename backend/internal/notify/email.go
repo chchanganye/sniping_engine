@@ -116,35 +116,7 @@ func (n *EmailNotifier) handle(evt OrderCreatedEvent) {
 		return
 	}
 
-	email := strings.TrimSpace(settings.Email)
-	host, port, useSSL, err := smtpConfigForEmail(email)
-	if err != nil {
-		if n.bus != nil {
-			n.bus.Log("warn", "resolve smtp failed", map[string]any{"error": err.Error(), "email": email})
-		}
-		return
-	}
-
-	subject := buildSubject(evt)
-	htmlBody, textBody, err := buildEmailBody(evt)
-	if err != nil {
-		if n.bus != nil {
-			n.bus.Log("warn", "build email body failed", map[string]any{"error": err.Error()})
-		}
-		return
-	}
-
-	msg := gomail.NewMessage()
-	msg.SetHeader("From", msg.FormatAddress(email, "sniping_engine"))
-	msg.SetHeader("To", email)
-	msg.SetHeader("Subject", subject)
-	msg.SetBody("text/plain", textBody)
-	msg.AddAlternative("text/html", htmlBody)
-
-	d := gomail.NewDialer(host, port, email, settings.AuthCode)
-	d.SSL = useSSL
-
-	if err := d.DialAndSend(msg); err != nil {
+	if err := SendOrderCreatedEmail(n.ctx, settings, evt); err != nil {
 		if n.bus != nil {
 			n.bus.Log("warn", "email send failed", map[string]any{
 				"error":     err.Error(),
@@ -161,15 +133,12 @@ func (n *EmailNotifier) handle(evt OrderCreatedEvent) {
 			"targetId":  evt.TargetID,
 			"accountId": evt.AccountID,
 			"orderId":   evt.OrderID,
-			"to":        email,
+			"to":        strings.TrimSpace(settings.Email),
 		})
 	}
 }
 
 func validateEmailSettings(s model.EmailSettings) error {
-	if !s.Enabled {
-		return nil
-	}
 	email := strings.TrimSpace(s.Email)
 	if email == "" {
 		return errors.New("email is required")
@@ -181,6 +150,37 @@ func validateEmailSettings(s model.EmailSettings) error {
 		return errors.New("authCode is required")
 	}
 	return nil
+}
+
+func SendOrderCreatedEmail(ctx context.Context, settings model.EmailSettings, evt OrderCreatedEvent) error {
+	if err := validateEmailSettings(settings); err != nil {
+		return err
+	}
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+
+	email := strings.TrimSpace(settings.Email)
+	host, port, useSSL, err := smtpConfigForEmail(email)
+	if err != nil {
+		return err
+	}
+	subject := buildSubject(evt)
+	htmlBody, textBody, err := buildEmailBody(evt)
+	if err != nil {
+		return err
+	}
+
+	msg := gomail.NewMessage()
+	msg.SetHeader("From", msg.FormatAddress(email, "sniping_engine"))
+	msg.SetHeader("To", email)
+	msg.SetHeader("Subject", subject)
+	msg.SetBody("text/plain", textBody)
+	msg.AddAlternative("text/html", htmlBody)
+
+	d := gomail.NewDialer(host, port, email, strings.TrimSpace(settings.AuthCode))
+	d.SSL = useSSL
+	return d.DialAndSend(msg)
 }
 
 func smtpConfigForEmail(email string) (host string, port int, useSSL bool, err error) {

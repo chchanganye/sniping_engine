@@ -143,6 +143,7 @@ export interface Task {
   enabled: boolean
   status: TaskStatus
   purchasedQty: number
+  needCaptcha?: boolean
   lastError?: string
   lastAttemptMs?: number
   lastSuccessMs?: number

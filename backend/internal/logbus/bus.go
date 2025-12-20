@@ -17,6 +17,17 @@ type LogData struct {
 	Fields map[string]any `json:"fields,omitempty"`
 }
 
+type ProgressData struct {
+	OpID      string         `json:"opId"`
+	Kind      string         `json:"kind"`
+	Step      string         `json:"step"`
+	Phase     string         `json:"phase"`
+	Message   string         `json:"message,omitempty"`
+	TargetID  string         `json:"targetId,omitempty"`
+	AccountID string         `json:"accountId,omitempty"`
+	Fields    map[string]any `json:"fields,omitempty"`
+}
+
 type Bus struct {
 	mu     sync.RWMutex
 	buf    []Message
@@ -115,4 +126,3 @@ func (b *Bus) Publish(typ string, data any) {
 func (b *Bus) Log(level, message string, fields map[string]any) {
 	b.Publish("log", LogData{Level: level, Msg: message, Fields: fields})
 }
-

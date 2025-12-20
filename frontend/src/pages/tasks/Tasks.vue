@@ -1,24 +1,27 @@
 <script setup lang="ts">
-import { computed, onMounted } from 'vue'
+import { computed, onMounted, reactive } from 'vue'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import { storeToRefs } from 'pinia'
-import { Delete, Refresh } from '@element-plus/icons-vue'
+import { Delete, Lightning, Refresh } from '@element-plus/icons-vue'
 import { useAccountsStore } from '@/stores/accounts'
 import { useGoodsStore } from '@/stores/goods'
+import { useProgressStore } from '@/stores/progress'
 import { useTasksStore } from '@/stores/tasks'
 import type { TaskMode, Task } from '@/types/core'
+import { uid } from '@/utils/id'
 
 const accountsStore = useAccountsStore()
 const goodsStore = useGoodsStore()
 const tasksStore = useTasksStore()
+const progressStore = useProgressStore()
 
 const { accounts } = storeToRefs(accountsStore)
 const { targetGoods } = storeToRefs(goodsStore)
-const { tasks, engineRunning, engineLoading, loading } = storeToRefs(tasksStore)
+const { tasks, engineRunning, engineLoading, loading, captchaLoading } = storeToRefs(tasksStore)
 
 onMounted(() => {
   void accountsStore.ensureLoaded()
-  void tasksStore.refresh().catch(() => null)
+  void refreshAll(false)
 })
 
 const goodsMap = computed(() => {
@@ -33,6 +36,21 @@ const modeOptions: Array<{ label: string; value: TaskMode }> = [
 ]
 
 const enabledCount = computed(() => tasks.value.filter((t) => t.enabled).length)
+
+const testing = reactive<Record<string, boolean>>({})
+
+async function refreshAll(forceCaptcha = false) {
+  try {
+    await tasksStore.refresh()
+  } catch {
+    // ignore
+  }
+  try {
+    await tasksStore.probeCaptchaFlags(forceCaptcha)
+  } catch {
+    // ignore
+  }
+}
 
 async function start() {
   if (accounts.value.length === 0) {
@@ -56,6 +74,32 @@ async function remove(row: Task) {
   await ElMessageBox.confirm(`确认删除目标任务：${row.goodsTitle}？`, '提示', { type: 'warning' }).catch(() => null)
   await tasksStore.removeTask(row.id)
   ElMessage.success('已删除')
+}
+
+async function testBuy(row: Task) {
+  if (testing[row.id]) return
+  const opId = uid('op')
+  progressStore.begin({ opId, kind: 'test_buy', title: `测试抢购：${row.goodsTitle}`, targetId: row.id })
+  progressStore.addEvent(Date.now(), { opId, kind: 'test_buy', step: 'request', phase: 'info', message: '已发送测试抢购请求', targetId: row.id })
+  testing[row.id] = true
+  try {
+    // 调用testBuy时不传递captchaVerifyParam，让后端自动处理验证码
+    const res = await tasksStore.testBuy(row.id, '', opId)
+    if (!res.canBuy) {
+      ElMessage.warning(res.message || '当前不可购买')
+      return
+    }
+    if (res.success) {
+      ElMessage.success(`下单成功${res.orderId ? `（${res.orderId}）` : ''}`)
+      return
+    }
+    ElMessage.warning(res.message || '下单未成功')
+  } catch (e) {
+    ElMessage.error(e instanceof Error ? e.message : '测试抢购失败')
+  } finally {
+    delete testing[row.id]
+    void tasksStore.refresh().catch(() => null)
+  }
 }
 
 function onRushAtChange(row: Task, value: Date | null) {
@@ -94,7 +138,7 @@ function statusMeta(row: Task) {
           </el-tag>
         </div>
         <el-space :size="8" wrap>
-          <el-button :loading="loading" :icon="Refresh" @click="tasksStore.refresh()">刷新</el-button>
+          <el-button :loading="loading || captchaLoading" :icon="Refresh" @click="refreshAll(true)">刷新</el-button>
           <el-button type="success" :disabled="engineRunning" :loading="engineLoading" @click="start">开始执行</el-button>
           <el-button type="warning" :disabled="!engineRunning" :loading="engineLoading" @click="stop">停止执行</el-button>
         </el-space>
@@ -119,16 +163,6 @@ function statusMeta(row: Task) {
                 </div>
               </div>
             </div>
-          </template>
-        </el-table-column>
-
-        <el-table-column label="启用" width="90">
-          <template #default="{ row }">
-            <el-switch
-              v-model="row.enabled"
-              :disabled="engineRunning"
-              @change="() => tasksStore.updateTask(row.id, { enabled: row.enabled })"
-            />
           </template>
         </el-table-column>
 
@@ -204,8 +238,37 @@ function statusMeta(row: Task) {
           </template>
         </el-table-column>
 
-        <el-table-column label="操作" width="80">
+        <el-table-column label="启用" width="90">
           <template #default="{ row }">
+            <el-switch
+              v-model="row.enabled"
+              :disabled="engineRunning"
+              @change="() => tasksStore.updateTask(row.id, { enabled: row.enabled })"
+            />
+          </template>
+        </el-table-column>
+
+        <el-table-column label="是否需要验证码" width="140">
+          <template #default="{ row }">
+            <el-tag v-if="row.needCaptcha === true" type="warning" size="small" effect="light">需要验证码</el-tag>
+            <el-tag v-else-if="row.needCaptcha === false" type="success" size="small" effect="light">无需验证码</el-tag>
+            <el-tag v-else type="info" size="small" effect="light">未知</el-tag>
+          </template>
+        </el-table-column>
+
+        <el-table-column label="操作" width="120">
+          <template #default="{ row }">
+            <el-tooltip content="测试抢购" placement="top">
+              <el-button
+                circle
+                size="small"
+                type="primary"
+                :icon="Lightning"
+                :loading="Boolean(testing[row.id])"
+                :disabled="engineRunning || Boolean(testing[row.id])"
+                @click="testBuy(row)"
+              />
+            </el-tooltip>
             <el-tooltip content="删除" placement="top">
               <el-button circle size="small" type="danger" :icon="Delete" :disabled="engineRunning" @click="remove(row)" />
             </el-tooltip>

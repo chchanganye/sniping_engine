@@ -2,6 +2,7 @@
 import { computed, onMounted, ref, watch } from 'vue'
 import { ElMessage } from 'element-plus'
 import { storeToRefs } from 'pinia'
+import { Delete, Plus } from '@element-plus/icons-vue'
 import type { ShippingAddress, ShopCategoryNode } from '@/types/core'
 import { useAccountsStore } from '@/stores/accounts'
 import { useGoodsStore } from '@/stores/goods'
@@ -25,7 +26,6 @@ const {
   selectedGroupId,
   goods,
   goodsLoading,
-  selectedGoodsId,
   targetGoods,
   targetGoodsCount,
 } = storeToRefs(goodsStore)
@@ -306,33 +306,14 @@ onMounted(async () => {
             <el-table-column label="库存" width="90">
               <template #default="{ row }">{{ typeof row.stock === 'number' ? row.stock : '-' }}</template>
             </el-table-column>
-            <el-table-column label="目标" width="70">
+            <el-table-column label="操作" width="90">
               <template #default="{ row }">
-                <el-tag v-if="goodsStore.isInTargetList(row.id)" type="success" size="small">
-                  {{ row.id === selectedGoodsId ? '当前' : '已选' }}
-                </el-tag>
-                <span v-else style="color: #c0c4cc">-</span>
-              </template>
-            </el-table-column>
-            <el-table-column label="操作" width="130">
-              <template #default="{ row }">
-                <el-button
-                  v-if="!goodsStore.isInTargetList(row.id)"
-                  size="small"
-                  type="primary"
-                  @click="addToTargetList(row)"
-                >
-                  加入清单
-                </el-button>
-                <el-button
-                  v-else
-                  size="small"
-                  type="danger"
-                  plain
-                  @click="removeFromTargetList(row.id)"
-                >
-                  移出
-                </el-button>
+                <el-tooltip v-if="!goodsStore.isInTargetList(row.id)" content="加入目标清单" placement="top">
+                  <el-button circle size="small" type="primary" :icon="Plus" @click="addToTargetList(row)" />
+                </el-tooltip>
+                <el-tooltip v-else content="从目标清单移除" placement="top">
+                  <el-button circle size="small" type="danger" :icon="Delete" @click="removeFromTargetList(row.id)" />
+                </el-tooltip>
               </template>
             </el-table-column>
           </el-table>
@@ -382,9 +363,6 @@ onMounted(async () => {
                 <div style="font-weight: 600; overflow: hidden; text-overflow: ellipsis; white-space: nowrap">
                   {{ row.title }}
                 </div>
-                <div style="color: #909399; font-size: 12px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap">
-                  {{ row.id }}
-                </div>
               </div>
             </div>
           </template>
@@ -394,7 +372,9 @@ onMounted(async () => {
         </el-table-column>
         <el-table-column label="操作" width="90">
           <template #default="{ row }">
-            <el-button size="small" type="danger" text @click="removeFromTargetList(row.id)">移除</el-button>
+            <el-tooltip content="移除" placement="top">
+              <el-button circle size="small" type="danger" :icon="Delete" @click="removeFromTargetList(row.id)" />
+            </el-tooltip>
           </template>
         </el-table-column>
       </el-table>

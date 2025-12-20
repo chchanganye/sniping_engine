@@ -19,6 +19,7 @@ backend/*.db-shm
 backend/*.db-wal
 backend/bin/
 backend/*.exe
+backend/_experiments/
 
 # Editor directories and files
 .vscode/*

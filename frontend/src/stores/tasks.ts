@@ -3,13 +3,17 @@ import type { GoodsItem, Task, TaskMode, TaskStatus } from '@/types/core'
 import {
   beDeleteTarget,
   beEngineStart,
+  beEnginePreflight,
   beEngineState,
+  beEngineTestBuy,
   beEngineStop,
   beListTargets,
   beUpsertTarget,
   type BackendTarget,
   type EngineState,
   type EngineTaskState,
+  type EnginePreflightResult,
+  type EngineTestBuyResult,
 } from '@/services/backend'
 import { useGoodsStore } from '@/stores/goods'
 
@@ -37,6 +41,7 @@ function normalizeTaskStatus(target: BackendTarget, state: EngineTaskState | und
 function mapTargetToTask(target: BackendTarget, engine: EngineState | null): Task {
   const state = engine?.tasks?.find((t) => t.targetId === target.id)
   const purchasedQty = typeof state?.purchasedQty === 'number' ? state.purchasedQty : 0
+  const needCaptcha = typeof state?.needCaptcha === 'boolean' ? state.needCaptcha : undefined
 
   return {
     id: target.id,
@@ -52,6 +57,7 @@ function mapTargetToTask(target: BackendTarget, engine: EngineState | null): Tas
     enabled: Boolean(target.enabled),
     status: normalizeTaskStatus(target, state, Boolean(engine?.running)),
     purchasedQty,
+    needCaptcha,
     lastError: typeof state?.lastError === 'string' ? state.lastError : undefined,
     lastAttemptMs: state?.lastAttemptMs,
     lastSuccessMs: state?.lastSuccessMs,
@@ -81,6 +87,7 @@ export const useTasksStore = defineStore('tasks', {
     engine: null as EngineState | null,
     tasks: [] as Task[],
     loaded: false,
+    captchaLoading: false,
   }),
   getters: {
     summary: (state) => {
@@ -216,6 +223,7 @@ export const useTasksStore = defineStore('tasks', {
       const next: Task = {
         ...current,
         purchasedQty: typeof state.purchasedQty === 'number' ? state.purchasedQty : current.purchasedQty,
+        needCaptcha: typeof state.needCaptcha === 'boolean' ? state.needCaptcha : current.needCaptcha,
         lastError: typeof state.lastError === 'string' ? state.lastError : undefined,
         lastAttemptMs: state.lastAttemptMs,
         lastSuccessMs: state.lastSuccessMs,
@@ -237,6 +245,37 @@ export const useTasksStore = defineStore('tasks', {
         Boolean(this.engine?.running),
       )
       this.tasks.splice(idx, 1, next)
+    },
+    async testBuy(targetId: string, captchaVerifyParam?: string, opId?: string): Promise<EngineTestBuyResult> {
+      return beEngineTestBuy(targetId, captchaVerifyParam, opId)
+    },
+
+    async preflight(targetId: string): Promise<EnginePreflightResult> {
+      return beEnginePreflight(targetId)
+    },
+
+    async probeCaptchaFlags(force = false) {
+      if (this.captchaLoading) return
+
+      const pending = (force ? this.tasks : this.tasks.filter((t) => typeof t.needCaptcha !== 'boolean')).map((t) => t.id)
+      if (pending.length === 0) return
+
+      this.captchaLoading = true
+      try {
+        for (const id of pending) {
+          try {
+            const res = await this.preflight(id)
+            const idx = this.tasks.findIndex((t) => t.id === id)
+            if (idx >= 0) {
+              this.tasks.splice(idx, 1, { ...this.tasks[idx]!, needCaptcha: res.needCaptcha })
+            }
+          } catch {
+            // ignore: keep unknown
+          }
+        }
+      } finally {
+        this.captchaLoading = false
+      }
     },
   },
 })

@@ -1,4 +1,5 @@
 import { http } from '@/services/http'
+import axios from 'axios'
 
 export interface BackendAccount {
   id: string
@@ -36,6 +37,7 @@ export interface EngineTaskState {
   running: boolean
   purchasedQty: number
   targetQty: number
+  needCaptcha?: boolean
   lastError?: string
   lastAttemptMs?: number
   lastSuccessMs?: number
@@ -44,6 +46,23 @@ export interface EngineTaskState {
 export interface EngineState {
   running: boolean
   tasks: EngineTaskState[]
+}
+
+export interface EngineTestBuyResult {
+  canBuy: boolean
+  needCaptcha?: boolean
+  success: boolean
+  orderId?: string
+  traceId?: string
+  message?: string
+}
+
+export interface EnginePreflightResult {
+  canBuy: boolean
+  needCaptcha: boolean
+  totalFee: number
+  traceId?: string
+  message?: string
 }
 
 export interface EmailSettings {
@@ -95,6 +114,28 @@ export async function beEngineState(): Promise<EngineState> {
   return resp.data.data
 }
 
+export async function beEnginePreflight(targetId: string): Promise<EnginePreflightResult> {
+  try {
+    const resp = await http.post<DataEnvelope<EnginePreflightResult>>('/api/v1/engine/preflight', { targetId })
+    return resp.data.data
+  } catch (e) {
+    throw new Error(extractBackendErrorMessage(e, '预检失败'))
+  }
+}
+
+export async function beEngineTestBuy(targetId: string, captchaVerifyParam?: string, opId?: string): Promise<EngineTestBuyResult> {
+  try {
+    const resp = await http.post<DataEnvelope<EngineTestBuyResult>>('/api/v1/engine/test-buy', {
+      targetId,
+      captchaVerifyParam: captchaVerifyParam?.trim() || undefined,
+      opId: opId?.trim() || undefined,
+    })
+    return resp.data.data
+  } catch (e) {
+    throw new Error(extractBackendErrorMessage(e, '测试抢购失败'))
+  }
+}
+
 export async function beGetEmailSettings(): Promise<EmailSettings> {
   const resp = await http.get<DataEnvelope<EmailSettings>>('/api/v1/settings/email')
   return resp.data.data
@@ -105,6 +146,24 @@ export async function beSaveEmailSettings(payload: Partial<EmailSettings>): Prom
   return resp.data.data
 }
 
-export async function beTestEmail(): Promise<void> {
-  await http.post('/api/v1/settings/email/test')
+export async function beTestEmail(payload?: Partial<EmailSettings>): Promise<void> {
+  try {
+    await http.post('/api/v1/settings/email/test', payload ?? {})
+  } catch (e) {
+    throw new Error(extractBackendErrorMessage(e, '发送测试邮件失败'))
+  }
+}
+
+function extractBackendErrorMessage(error: unknown, fallback: string): string {
+  if (axios.isAxiosError(error)) {
+    const data = error.response?.data as any
+    if (data) {
+      if (typeof data === 'string') return data.trim() || fallback
+      if (typeof data.error === 'string' && data.error.trim()) return data.error.trim()
+      if (typeof data.message === 'string' && data.message.trim()) return data.message.trim()
+    }
+    return error.message || fallback
+  }
+  if (error instanceof Error) return error.message
+  return fallback
 }

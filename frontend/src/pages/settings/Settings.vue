@@ -15,6 +15,17 @@ const form = reactive<EmailSettings>({
   authCode: '',
 })
 
+function isValidEmailLike(value: string): boolean {
+  const v = String(value ?? '').trim()
+  if (!v) return false
+  if (/\s/.test(v)) return false
+  const at = v.indexOf('@')
+  if (at <= 0) return false
+  if (at !== v.lastIndexOf('@')) return false
+  if (at >= v.length - 1) return false
+  return true
+}
+
 const rules: FormRules = {
   email: [
     {
@@ -22,7 +33,7 @@ const rules: FormRules = {
         if (!form.enabled) return callback()
         const v = String(value ?? '').trim()
         if (!v) return callback(new Error('请输入收件邮箱'))
-        if (!/^[^@\\s]+@[^@\\s]+\\.[^@\\s]+$/.test(v)) return callback(new Error('邮箱格式不正确'))
+        if (!isValidEmailLike(v)) return callback(new Error('邮箱格式不正确'))
         return callback()
       },
       trigger: 'blur',
@@ -55,40 +66,38 @@ async function load() {
   }
 }
 
-async function save() {
+async function save(silent = false): Promise<boolean> {
   const ok = await formRef.value?.validate().catch(() => false)
-  if (!ok) return
+  if (!ok) return false
 
   saving.value = true
   try {
     const payload: Partial<EmailSettings> = {
       enabled: form.enabled,
       email: form.email.trim(),
+      authCode: (form.authCode || '').trim(),
     }
-    const authCode = (form.authCode || '').trim()
-    if (authCode && authCode !== '******') payload.authCode = authCode
-
     const saved = await beSaveEmailSettings(payload)
     form.enabled = Boolean(saved.enabled)
     form.email = saved.email || ''
     form.authCode = saved.authCode || ''
-    if (payload.authCode) form.authCode = '******'
 
-    ElMessage.success('已保存')
+    if (!silent) ElMessage.success('已保存')
+    return true
   } catch (e) {
     ElMessage.error(e instanceof Error ? e.message : '保存失败')
+    return false
   } finally {
     saving.value = false
   }
 }
 
 async function testEmail() {
-  const ok = await formRef.value?.validate().catch(() => false)
-  if (!ok) return
-
   testing.value = true
   try {
-    await beTestEmail()
+    const savedOk = await save(true)
+    if (!savedOk) return
+    await beTestEmail({ email: form.email.trim(), authCode: (form.authCode || '').trim() })
     ElMessage.success('已触发测试邮件（请查收收件箱）')
   } catch (e) {
     ElMessage.error(e instanceof Error ? e.message : '测试失败')

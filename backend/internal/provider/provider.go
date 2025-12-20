@@ -8,9 +8,11 @@ import (
 )
 
 type PreflightResult struct {
-	CanBuy   bool   `json:"canBuy"`
-	TotalFee int64  `json:"totalFee"`
-	TraceID  string `json:"traceId,omitempty"`
+	CanBuy      bool            `json:"canBuy"`
+	NeedCaptcha bool            `json:"needCaptcha,omitempty"`
+	TotalFee    int64           `json:"totalFee"`
+	TraceID     string          `json:"traceId,omitempty"`
+	Render      json.RawMessage `json:"render,omitempty"`
 }
 
 type CreateResult struct {
@@ -20,7 +22,7 @@ type CreateResult struct {
 }
 
 type ShippingAddressParams struct {
-	App       string `json:"app"`
+	App        string `json:"app"`
 	IsAllCover int    `json:"isAllCover"`
 }
 

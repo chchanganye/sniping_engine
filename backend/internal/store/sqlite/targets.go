@@ -39,8 +39,8 @@ func (s *Store) UpsertTarget(ctx context.Context, t model.Target) (model.Target,
 	}
 
 	_, err := s.db.ExecContext(ctx, `
-		INSERT INTO targets (id, name, image_url, item_id, sku_id, shop_id, mode, target_qty, per_order_qty, rush_at_ms, enabled, created_at, updated_at)
-		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+		INSERT INTO targets (id, name, image_url, item_id, sku_id, shop_id, mode, target_qty, per_order_qty, rush_at_ms, captcha_verify_param, enabled, created_at, updated_at)
+		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 		ON CONFLICT(id) DO UPDATE SET
 			name = excluded.name,
 			image_url = excluded.image_url,
@@ -51,9 +51,10 @@ func (s *Store) UpsertTarget(ctx context.Context, t model.Target) (model.Target,
 			target_qty = excluded.target_qty,
 			per_order_qty = excluded.per_order_qty,
 			rush_at_ms = excluded.rush_at_ms,
+			captcha_verify_param = excluded.captcha_verify_param,
 			enabled = excluded.enabled,
 			updated_at = excluded.updated_at
-	`, t.ID, t.Name, t.ImageURL, t.ItemID, t.SKUID, t.ShopID, string(t.Mode), t.TargetQty, t.PerOrderQty, t.RushAtMs, enabled, t.CreatedAt.UnixMilli(), t.UpdatedAt.UnixMilli())
+	`, t.ID, t.Name, t.ImageURL, t.ItemID, t.SKUID, t.ShopID, string(t.Mode), t.TargetQty, t.PerOrderQty, t.RushAtMs, t.CaptchaVerifyParam, enabled, t.CreatedAt.UnixMilli(), t.UpdatedAt.UnixMilli())
 	if err != nil {
 		return model.Target{}, err
 	}
@@ -62,47 +63,49 @@ func (s *Store) UpsertTarget(ctx context.Context, t model.Target) (model.Target,
 
 func (s *Store) GetTarget(ctx context.Context, id string) (model.Target, error) {
 	var row struct {
-		id          string
-		name        string
-		imageURL    string
-		itemID      int64
-		skuID       int64
-		shopID      int64
-		mode        string
-		targetQty   int
-		perOrderQty int
-		rushAtMs    int64
-		enabled     int
-		createdAt   int64
-		updatedAt   int64
+		id                 string
+		name               string
+		imageURL           string
+		itemID             int64
+		skuID              int64
+		shopID             int64
+		mode               string
+		targetQty          int
+		perOrderQty        int
+		rushAtMs           int64
+		captchaVerifyParam string
+		enabled            int
+		createdAt          int64
+		updatedAt          int64
 	}
 	err := s.db.QueryRowContext(ctx, `
-		SELECT id, name, image_url, item_id, sku_id, shop_id, mode, target_qty, per_order_qty, rush_at_ms, enabled, created_at, updated_at
+		SELECT id, name, image_url, item_id, sku_id, shop_id, mode, target_qty, per_order_qty, rush_at_ms, captcha_verify_param, enabled, created_at, updated_at
 		FROM targets WHERE id = ?
-	`, id).Scan(&row.id, &row.name, &row.imageURL, &row.itemID, &row.skuID, &row.shopID, &row.mode, &row.targetQty, &row.perOrderQty, &row.rushAtMs, &row.enabled, &row.createdAt, &row.updatedAt)
+	`, id).Scan(&row.id, &row.name, &row.imageURL, &row.itemID, &row.skuID, &row.shopID, &row.mode, &row.targetQty, &row.perOrderQty, &row.rushAtMs, &row.captchaVerifyParam, &row.enabled, &row.createdAt, &row.updatedAt)
 	if err != nil {
 		return model.Target{}, err
 	}
 	return model.Target{
-		ID:          row.id,
-		Name:        row.name,
-		ImageURL:    row.imageURL,
-		ItemID:      row.itemID,
-		SKUID:       row.skuID,
-		ShopID:      row.shopID,
-		Mode:        model.TargetMode(row.mode),
-		TargetQty:   row.targetQty,
-		PerOrderQty: row.perOrderQty,
-		RushAtMs:    row.rushAtMs,
-		Enabled:     row.enabled == 1,
-		CreatedAt:   time.UnixMilli(row.createdAt),
-		UpdatedAt:   time.UnixMilli(row.updatedAt),
+		ID:                 row.id,
+		Name:               row.name,
+		ImageURL:           row.imageURL,
+		ItemID:             row.itemID,
+		SKUID:              row.skuID,
+		ShopID:             row.shopID,
+		Mode:               model.TargetMode(row.mode),
+		TargetQty:          row.targetQty,
+		PerOrderQty:        row.perOrderQty,
+		RushAtMs:           row.rushAtMs,
+		CaptchaVerifyParam: row.captchaVerifyParam,
+		Enabled:            row.enabled == 1,
+		CreatedAt:          time.UnixMilli(row.createdAt),
+		UpdatedAt:          time.UnixMilli(row.updatedAt),
 	}, nil
 }
 
 func (s *Store) ListTargets(ctx context.Context) ([]model.Target, error) {
 	rows, err := s.db.QueryContext(ctx, `
-		SELECT id, name, image_url, item_id, sku_id, shop_id, mode, target_qty, per_order_qty, rush_at_ms, enabled, created_at, updated_at
+		SELECT id, name, image_url, item_id, sku_id, shop_id, mode, target_qty, per_order_qty, rush_at_ms, captcha_verify_param, enabled, created_at, updated_at
 		FROM targets ORDER BY updated_at DESC
 	`)
 	if err != nil {
@@ -113,37 +116,39 @@ func (s *Store) ListTargets(ctx context.Context) ([]model.Target, error) {
 	var out []model.Target
 	for rows.Next() {
 		var row struct {
-			id          string
-			name        string
-			imageURL    string
-			itemID      int64
-			skuID       int64
-			shopID      int64
-			mode        string
-			targetQty   int
-			perOrderQty int
-			rushAtMs    int64
-			enabled     int
-			createdAt   int64
-			updatedAt   int64
+			id                 string
+			name               string
+			imageURL           string
+			itemID             int64
+			skuID              int64
+			shopID             int64
+			mode               string
+			targetQty          int
+			perOrderQty        int
+			rushAtMs           int64
+			captchaVerifyParam string
+			enabled            int
+			createdAt          int64
+			updatedAt          int64
 		}
-		if err := rows.Scan(&row.id, &row.name, &row.imageURL, &row.itemID, &row.skuID, &row.shopID, &row.mode, &row.targetQty, &row.perOrderQty, &row.rushAtMs, &row.enabled, &row.createdAt, &row.updatedAt); err != nil {
+		if err := rows.Scan(&row.id, &row.name, &row.imageURL, &row.itemID, &row.skuID, &row.shopID, &row.mode, &row.targetQty, &row.perOrderQty, &row.rushAtMs, &row.captchaVerifyParam, &row.enabled, &row.createdAt, &row.updatedAt); err != nil {
 			return nil, err
 		}
 		out = append(out, model.Target{
-			ID:          row.id,
-			Name:        row.name,
-			ImageURL:    row.imageURL,
-			ItemID:      row.itemID,
-			SKUID:       row.skuID,
-			ShopID:      row.shopID,
-			Mode:        model.TargetMode(row.mode),
-			TargetQty:   row.targetQty,
-			PerOrderQty: row.perOrderQty,
-			RushAtMs:    row.rushAtMs,
-			Enabled:     row.enabled == 1,
-			CreatedAt:   time.UnixMilli(row.createdAt),
-			UpdatedAt:   time.UnixMilli(row.updatedAt),
+			ID:                 row.id,
+			Name:               row.name,
+			ImageURL:           row.imageURL,
+			ItemID:             row.itemID,
+			SKUID:              row.skuID,
+			ShopID:             row.shopID,
+			Mode:               model.TargetMode(row.mode),
+			TargetQty:          row.targetQty,
+			PerOrderQty:        row.perOrderQty,
+			RushAtMs:           row.rushAtMs,
+			CaptchaVerifyParam: row.captchaVerifyParam,
+			Enabled:            row.enabled == 1,
+			CreatedAt:          time.UnixMilli(row.createdAt),
+			UpdatedAt:          time.UnixMilli(row.updatedAt),
 		})
 	}
 	if err := rows.Err(); err != nil {
@@ -154,7 +159,7 @@ func (s *Store) ListTargets(ctx context.Context) ([]model.Target, error) {
 
 func (s *Store) ListEnabledTargets(ctx context.Context) ([]model.Target, error) {
 	rows, err := s.db.QueryContext(ctx, `
-		SELECT id, name, image_url, item_id, sku_id, shop_id, mode, target_qty, per_order_qty, rush_at_ms, enabled, created_at, updated_at
+		SELECT id, name, image_url, item_id, sku_id, shop_id, mode, target_qty, per_order_qty, rush_at_ms, captcha_verify_param, enabled, created_at, updated_at
 		FROM targets WHERE enabled = 1 ORDER BY updated_at DESC
 	`)
 	if err != nil {
@@ -165,37 +170,39 @@ func (s *Store) ListEnabledTargets(ctx context.Context) ([]model.Target, error) 
 	var out []model.Target
 	for rows.Next() {
 		var row struct {
-			id          string
-			name        string
-			imageURL    string
-			itemID      int64
-			skuID       int64
-			shopID      int64
-			mode        string
-			targetQty   int
-			perOrderQty int
-			rushAtMs    int64
-			enabled     int
-			createdAt   int64
-			updatedAt   int64
+			id                 string
+			name               string
+			imageURL           string
+			itemID             int64
+			skuID              int64
+			shopID             int64
+			mode               string
+			targetQty          int
+			perOrderQty        int
+			rushAtMs           int64
+			captchaVerifyParam string
+			enabled            int
+			createdAt          int64
+			updatedAt          int64
 		}
-		if err := rows.Scan(&row.id, &row.name, &row.imageURL, &row.itemID, &row.skuID, &row.shopID, &row.mode, &row.targetQty, &row.perOrderQty, &row.rushAtMs, &row.enabled, &row.createdAt, &row.updatedAt); err != nil {
+		if err := rows.Scan(&row.id, &row.name, &row.imageURL, &row.itemID, &row.skuID, &row.shopID, &row.mode, &row.targetQty, &row.perOrderQty, &row.rushAtMs, &row.captchaVerifyParam, &row.enabled, &row.createdAt, &row.updatedAt); err != nil {
 			return nil, err
 		}
 		out = append(out, model.Target{
-			ID:          row.id,
-			Name:        row.name,
-			ImageURL:    row.imageURL,
-			ItemID:      row.itemID,
-			SKUID:       row.skuID,
-			ShopID:      row.shopID,
-			Mode:        model.TargetMode(row.mode),
-			TargetQty:   row.targetQty,
-			PerOrderQty: row.perOrderQty,
-			RushAtMs:    row.rushAtMs,
-			Enabled:     row.enabled == 1,
-			CreatedAt:   time.UnixMilli(row.createdAt),
-			UpdatedAt:   time.UnixMilli(row.updatedAt),
+			ID:                 row.id,
+			Name:               row.name,
+			ImageURL:           row.imageURL,
+			ItemID:             row.itemID,
+			SKUID:              row.skuID,
+			ShopID:             row.shopID,
+			Mode:               model.TargetMode(row.mode),
+			TargetQty:          row.targetQty,
+			PerOrderQty:        row.perOrderQty,
+			RushAtMs:           row.rushAtMs,
+			CaptchaVerifyParam: row.captchaVerifyParam,
+			Enabled:            row.enabled == 1,
+			CreatedAt:          time.UnixMilli(row.createdAt),
+			UpdatedAt:          time.UnixMilli(row.updatedAt),
 		})
 	}
 	if err := rows.Err(); err != nil {
