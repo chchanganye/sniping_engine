@@ -112,7 +112,7 @@ func (e *Engine) StartAll(ctx context.Context) error {
 	e.mu.Unlock()
 
 	if e.bus != nil {
-		e.bus.Log("info", "engine start", map[string]any{"provider": e.provider.Name()})
+		e.bus.Log("info", "引擎已启动", map[string]any{"provider": e.provider.Name()})
 	}
 
 	accounts, err := e.store.ListAccounts(ctx)
@@ -193,7 +193,7 @@ func (e *Engine) StopAll(ctx context.Context) error {
 	select {
 	case <-done:
 		if e.bus != nil {
-			e.bus.Log("info", "engine stopped", nil)
+			e.bus.Log("info", "引擎已停止", nil)
 		}
 		return nil
 	case <-ctx.Done():
@@ -226,7 +226,7 @@ func (e *Engine) runTarget(ctx context.Context, target model.Target) {
 	if target.Mode == model.TargetModeRush && target.RushAtMs > 0 {
 		startAt := time.UnixMilli(target.RushAtMs)
 		if e.bus != nil {
-			e.bus.Log("info", "target waiting for rush time", map[string]any{
+			e.bus.Log("info", "等待开抢时间", map[string]any{
 				"targetId": target.ID,
 				"startAt":  startAt.Format(time.RFC3339Nano),
 			})
@@ -318,7 +318,7 @@ func (e *Engine) attemptOnce(ctx context.Context, target model.Target) {
 
 	if !pre.CanBuy {
 		if e.bus != nil {
-			e.bus.Log("debug", "preflight: canBuy=false", map[string]any{
+			e.bus.Log("debug", "预下单结果：不可购买", map[string]any{
 				"targetId":  target.ID,
 				"accountId": acc.ID,
 				"traceId":   pre.TraceID,
@@ -349,7 +349,7 @@ func (e *Engine) attemptOnce(ctx context.Context, target model.Target) {
 		}
 		e.mu.Unlock()
 		if e.bus != nil {
-			e.bus.Log("info", "order created", map[string]any{
+			e.bus.Log("info", "下单成功", map[string]any{
 				"targetId":  target.ID,
 				"accountId": acc.ID,
 				"orderId":   res.OrderID,
@@ -537,7 +537,7 @@ func (e *Engine) TestBuyOnce(ctx context.Context, targetID string, captchaVerify
 		}
 		e.mu.Unlock()
 		if e.bus != nil {
-			e.bus.Log("info", "order created (test)", map[string]any{
+			e.bus.Log("info", "测试下单成功", map[string]any{
 				"targetId":  target.ID,
 				"accountId": acc.ID,
 				"orderId":   res.OrderID,
@@ -684,7 +684,7 @@ func (e *Engine) setError(targetID string, err error) {
 	st.LastError = err.Error()
 	e.publishStateLocked(*st)
 	if e.bus != nil {
-		e.bus.Log("warn", "task error", map[string]any{"targetId": targetID, "error": err.Error()})
+		e.bus.Log("warn", "任务执行失败", map[string]any{"targetId": targetID, "error": err.Error()})
 	}
 }
 

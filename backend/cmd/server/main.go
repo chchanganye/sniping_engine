@@ -73,13 +73,13 @@ func main() {
 
 	ln, err := net.Listen("tcp", cfg.Server.Addr)
 	if err != nil {
-		bus.Log("error", "listen failed", map[string]any{"addr": cfg.Server.Addr, "error": err.Error()})
+		bus.Log("error", "监听端口失败", map[string]any{"addr": cfg.Server.Addr, "error": err.Error()})
 		return
 	}
 	hostPort := displayHostPortFromListener(ln, cfg.Server.Addr)
 	printStartupBanner(cfg, *configPath, hostPort)
-	bus.Log("info", "server starting", map[string]any{"addr": ln.Addr().String()})
-	bus.Log("info", "http server listening", map[string]any{"addr": ln.Addr().String()})
+	bus.Log("info", "服务启动中", map[string]any{"addr": ln.Addr().String()})
+	bus.Log("info", "服务已启动，开始监听", map[string]any{"addr": ln.Addr().String()})
 
 	go func() {
 		serverErr <- server.Serve(ln)
@@ -90,10 +90,10 @@ func main() {
 
 	select {
 	case sig := <-stop:
-		bus.Log("info", "shutdown signal received", map[string]any{"signal": sig.String()})
+		bus.Log("info", "收到退出信号，正在停止服务", map[string]any{"signal": sig.String()})
 	case err := <-serverErr:
 		if err != nil && err != http.ErrServerClosed {
-			bus.Log("error", "http server error", map[string]any{"error": err.Error()})
+			bus.Log("error", "服务异常", map[string]any{"error": err.Error()})
 		}
 	}
 
@@ -103,7 +103,7 @@ func main() {
 	_ = eng.StopAll(shutdownCtx)
 	_ = emailNotifier.Close(shutdownCtx)
 	_ = server.Shutdown(shutdownCtx)
-	bus.Log("info", "server stopped", nil)
+	bus.Log("info", "服务已停止", nil)
 }
 
 func startConsoleLogger(bus *logbus.Bus) func() {

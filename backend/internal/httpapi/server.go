@@ -701,7 +701,7 @@ func (s *Server) newAnonymousUpstreamClient(jar *cookiejar.Jar, userAgent string
 
 	client.OnBeforeRequest(func(_ *resty.Client, req *resty.Request) error {
 		if s.bus != nil {
-			s.bus.Log("debug", "proxy request", map[string]any{
+			s.bus.Log("debug", "代理请求", map[string]any{
 				"method": req.Method,
 				"url":    req.URL,
 			})
@@ -976,7 +976,7 @@ func (s *Server) newUpstreamClient(account model.Account) (*resty.Client, *cooki
 
 	client.OnBeforeRequest(func(_ *resty.Client, req *resty.Request) error {
 		if s.bus != nil {
-			s.bus.Log("debug", "proxy request", map[string]any{
+			s.bus.Log("debug", "代理请求", map[string]any{
 				"method": req.Method,
 				"url":    req.URL,
 			})

@@ -28,3 +28,12 @@ body {
 .page {
   min-height: 100%;
 }
+
+/* 进度通知：仅显示一条简略信息 */
+.progress-notify .el-notification__icon {
+  display: none;
+}
+
+.progress-notify .el-notification__group {
+  margin-left: 0;
+}

@@ -71,7 +71,7 @@ func (n *EmailNotifier) NotifyOrderCreated(_ context.Context, evt OrderCreatedEv
 	case n.queue <- evt:
 	default:
 		if n.bus != nil {
-			n.bus.Log("warn", "email notify dropped (queue full)", map[string]any{
+			n.bus.Log("warn", "邮件通知丢弃：队列已满", map[string]any{
 				"targetId":  evt.TargetID,
 				"accountId": evt.AccountID,
 				"orderId":   evt.OrderID,
@@ -101,7 +101,7 @@ func (n *EmailNotifier) handle(evt OrderCreatedEvent) {
 	settings, ok, err := n.store.GetEmailSettings(n.ctx)
 	if err != nil {
 		if n.bus != nil {
-			n.bus.Log("warn", "load email settings failed", map[string]any{"error": err.Error()})
+			n.bus.Log("warn", "读取邮件配置失败", map[string]any{"error": err.Error()})
 		}
 		return
 	}
@@ -111,14 +111,14 @@ func (n *EmailNotifier) handle(evt OrderCreatedEvent) {
 
 	if err := validateEmailSettings(settings); err != nil {
 		if n.bus != nil {
-			n.bus.Log("warn", "email settings invalid", map[string]any{"error": err.Error()})
+			n.bus.Log("warn", "邮件配置无效", map[string]any{"error": err.Error()})
 		}
 		return
 	}
 
 	if err := SendOrderCreatedEmail(n.ctx, settings, evt); err != nil {
 		if n.bus != nil {
-			n.bus.Log("warn", "email send failed", map[string]any{
+			n.bus.Log("warn", "邮件发送失败", map[string]any{
 				"error":     err.Error(),
 				"targetId":  evt.TargetID,
 				"accountId": evt.AccountID,
@@ -129,7 +129,7 @@ func (n *EmailNotifier) handle(evt OrderCreatedEvent) {
 	}
 
 	if n.bus != nil {
-		n.bus.Log("info", "email sent", map[string]any{
+		n.bus.Log("info", "通知邮件已发送", map[string]any{
 			"targetId":  evt.TargetID,
 			"accountId": evt.AccountID,
 			"orderId":   evt.OrderID,

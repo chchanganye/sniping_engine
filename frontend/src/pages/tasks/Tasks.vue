@@ -80,7 +80,7 @@ async function testBuy(row: Task) {
   if (testing[row.id]) return
   const opId = uid('op')
   progressStore.begin({ opId, kind: 'test_buy', title: `测试抢购：${row.goodsTitle}`, targetId: row.id })
-  progressStore.addEvent(Date.now(), { opId, kind: 'test_buy', step: 'request', phase: 'info', message: '已发送测试抢购请求', targetId: row.id })
+  progressStore.addEvent(Date.now(), { opId, kind: 'test_buy', step: 'request', phase: 'info', message: '已发起抢购请求', targetId: row.id })
   testing[row.id] = true
   try {
     // 调用testBuy时不传递captchaVerifyParam，让后端自动处理验证码

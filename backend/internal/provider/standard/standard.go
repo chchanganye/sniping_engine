@@ -498,7 +498,7 @@ func (p *StandardProvider) newClient(account model.Account) (*resty.Client, *coo
 
 	client.OnBeforeRequest(func(_ *resty.Client, req *resty.Request) error {
 		if p.bus != nil {
-			p.bus.Log("debug", "http request", map[string]any{
+			p.bus.Log("debug", "发送网络请求", map[string]any{
 				"method": req.Method,
 				"url":    req.URL,
 			})
@@ -1036,5 +1036,5 @@ func (p *StandardProvider) logUpstreamFailure(api string, resp *resty.Response, 
 		}
 		out[k] = v
 	}
-	p.bus.Log("warn", "upstream request failed", out)
+	p.bus.Log("warn", "上游请求失败", out)
 }

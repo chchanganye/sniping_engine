@@ -24,28 +24,81 @@ function buildWsURL(path: string): string {
   return `${proto}://${loc.host}${path}`
 }
 
-function compactFields(fields?: Record<string, any>): string {
+function replaceAllLiteral(input: string, search: string, replacement: string) {
+  if (!search) return input
+  return input.split(search).join(replacement)
+}
+
+function normalizeErrorText(raw: string) {
+  let s = (raw || '').trim()
+  if (!s) return ''
+  s = replaceAllLiteral(s, 'verification.code.failed', '验证码校验失败')
+  s = replaceAllLiteral(s, 'create-order', '创建订单')
+  s = replaceAllLiteral(s, 'render-order', '预下单')
+  s = replaceAllLiteral(s, 'captcha', '验证码')
+  s = replaceAllLiteral(s, 'context deadline exceeded', '请求超时')
+  return s
+}
+
+function summarizeRequest(fields?: Record<string, any>) {
+  const method = typeof fields?.method === 'string' ? fields.method.trim().toUpperCase() : ''
+  const url = typeof fields?.url === 'string' ? fields.url.trim() : ''
+  const api = typeof fields?.api === 'string' ? fields.api.trim() : ''
+  const picked = api || url
+  if (!picked) return ''
+  return method ? `${method} ${picked}` : picked
+}
+
+function formatIds(fields?: Record<string, any>) {
   if (!fields) return ''
-  const picked: Record<string, any> = {}
-  for (const k of ['accountId', 'targetId', 'orderId', 'traceId', 'api', 'status', 'url', 'method', 'error']) {
-    if (fields[k] != null) picked[k] = fields[k]
+  const taskId = typeof fields.targetId === 'string' ? fields.targetId.trim() : ''
+  const accountId = typeof fields.accountId === 'string' ? fields.accountId.trim() : ''
+  const orderId = fields.orderId != null ? String(fields.orderId).trim() : ''
+  const parts: string[] = []
+  if (taskId) parts.push(`任务：${taskId}`)
+  if (accountId) parts.push(`账号：${accountId}`)
+  if (orderId) parts.push(`订单：${orderId}`)
+  return parts.length ? `（${parts.join('，')}）` : ''
+}
+
+function friendlyLogMessage(msg: string, fields?: Record<string, any>) {
+  const m = (msg || '').trim()
+  if (!m) return ''
+
+  if (m === 'server starting') return `服务启动中…${fields?.addr ? `（${String(fields.addr)}）` : ''}`
+  if (m === 'http server listening') return `服务已启动，正在监听：${String(fields?.addr ?? '-')}`
+  if (m === 'shutdown signal received') return `收到退出信号，正在停止服务…${fields?.signal ? `（${String(fields.signal)}）` : ''}`
+  if (m === 'server stopped') return '服务已停止'
+  if (m === 'listen failed') return `监听端口失败：${normalizeErrorText(String(fields?.error ?? '')) || '未知错误'}`
+  if (m === 'http server error') return `服务异常：${normalizeErrorText(String(fields?.error ?? '')) || '未知错误'}`
+
+  if (m === 'engine start') return `引擎已启动${fields?.provider ? `（${String(fields.provider)}）` : ''}`
+  if (m === 'engine stopped') return '引擎已停止'
+  if (m === 'target waiting for rush time') return '等待开抢时间…'
+  if (m === 'preflight: canBuy=false') return '预下单结果：当前不可购买'
+
+  if (m === 'http request') return `正在发送网络请求：${summarizeRequest(fields) || '请求中…'}`
+  if (m === 'proxy request') return `正在代理请求：${summarizeRequest(fields) || '请求中…'}`
+
+  if (m === 'upstream request failed') {
+    const reason = normalizeErrorText(String(fields?.error ?? '')) || '上游返回异常'
+    const api = typeof fields?.api === 'string' ? String(fields.api).trim() : ''
+    return api ? `上游请求失败（${api}）：${reason}` : `上游请求失败：${reason}`
   }
-  if (fields.body != null) {
-    try {
-      const raw = typeof fields.body === 'string' ? fields.body : JSON.stringify(fields.body)
-      const text = String(raw ?? '').trim()
-      if (text) picked.body = text.length > 800 ? text.slice(0, 800) + '...' : text
-    } catch {
-      // ignore
-    }
-  }
-  const keys = Object.keys(picked)
-  if (keys.length === 0) return ''
-  try {
-    return JSON.stringify(picked)
-  } catch {
-    return ''
-  }
+
+  if (m === 'task error') return `任务执行失败：${normalizeErrorText(String(fields?.error ?? '')) || '未知错误'}${formatIds(fields)}`
+  if (m === 'order created') return `下单成功${formatIds(fields)}`
+  if (m === 'order created (test)') return `测试下单成功${formatIds(fields)}`
+
+  if (m === 'email sent') return `通知邮件已发送${fields?.to ? `（${String(fields.to)}）` : ''}${formatIds(fields)}`
+  if (m === 'email send failed') return `邮件发送失败：${normalizeErrorText(String(fields?.error ?? '')) || '未知错误'}${formatIds(fields)}`
+  if (m === 'email settings invalid') return `邮件配置无效：${normalizeErrorText(String(fields?.error ?? '')) || '请检查设置'}`
+  if (m === 'load email settings failed') return `读取邮件配置失败：${normalizeErrorText(String(fields?.error ?? '')) || '未知错误'}`
+  if (m === 'email notify dropped (queue full)') return `邮件通知丢弃：队列已满${formatIds(fields)}`
+
+  // 已经是中文/或无法识别：尽量把常见错误码转成中文
+  const normalized = normalizeErrorText(m)
+  return normalized === m ? m : normalized
 }
 
 export const useLogsStore = defineStore('logs', {
@@ -112,8 +165,7 @@ export const useLogsStore = defineStore('logs', {
           if (msg.type === 'log') {
             const at = typeof msg.time === 'number' ? new Date(msg.time).toISOString() : new Date().toISOString()
             const fields = msg.data?.fields as Record<string, any> | undefined
-            const suffix = compactFields(fields)
-            const text = suffix ? `${msg.data?.msg ?? ''} ${suffix}`.trim() : String(msg.data?.msg ?? '')
+            const text = friendlyLogMessage(String(msg.data?.msg ?? ''), fields) || '（空日志）'
 
             this.addLog({
               at,
