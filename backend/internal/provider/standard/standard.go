@@ -270,7 +270,7 @@ func (p *StandardProvider) CreateOrder(ctx context.Context, account model.Accoun
 			}
 
 			// 调用验证码解决方法
-			captchaVerifyParam, err = utils.SolveAliyunCaptcha(timestamp, dracoToken)
+			captchaVerifyParam, err = utils.SolveAliyunCaptchaWithContext(ctx, timestamp, dracoToken)
 			if err != nil {
 				return provider.CreateResult{}, model.Account{}, fmt.Errorf("failed to solve captcha: %v", err)
 			}

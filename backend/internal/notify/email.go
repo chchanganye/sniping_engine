@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"errors"
+	"fmt"
 	"html/template"
 	"net/mail"
 	"strconv"
@@ -172,7 +173,7 @@ func SendOrderCreatedEmail(ctx context.Context, settings model.EmailSettings, ev
 	}
 
 	msg := gomail.NewMessage()
-	msg.SetHeader("From", msg.FormatAddress(email, "sniping_engine"))
+	msg.SetHeader("From", msg.FormatAddress(email, "抢购助手"))
 	msg.SetHeader("To", email)
 	msg.SetHeader("Subject", subject)
 	msg.SetBody("text/plain", textBody)
@@ -223,7 +224,7 @@ func buildSubject(evt OrderCreatedEvent) string {
 	if qty <= 0 {
 		qty = 1
 	}
-	return "抢购成功｜" + name + " × " + strconv.Itoa(qty)
+	return fmt.Sprintf("下单成功（%s）：%s × %d", modeLabel(evt.Mode), name, qty)
 }
 
 var emailHTMLTpl = template.Must(template.New("email").Parse(`
@@ -232,21 +233,20 @@ var emailHTMLTpl = template.Must(template.New("email").Parse(`
   <head>
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width" />
-    <title>抢购成功</title>
+    <title>下单成功</title>
   </head>
   <body style="margin:0;padding:0;background:#f6f8fb;font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,'Helvetica Neue',Arial,'PingFang SC','Hiragino Sans GB','Microsoft YaHei',sans-serif;">
     <div style="max-width:720px;margin:0 auto;padding:24px;">
       <div style="background:#ffffff;border:1px solid #e6e8ef;border-radius:14px;overflow:hidden;">
         <div style="padding:18px 22px;background:linear-gradient(135deg,#0ea5e9,#6366f1);color:#ffffff;">
-          <div style="font-size:16px;font-weight:700;letter-spacing:.2px;">抢购成功</div>
-          <div style="margin-top:6px;font-size:12px;opacity:.95;">sniping_engine 通知</div>
+          <div style="font-size:16px;font-weight:700;letter-spacing:.2px;">下单成功</div>
+          <div style="margin-top:6px;font-size:12px;opacity:.95;">抢购助手通知</div>
         </div>
 
         <div style="padding:22px;">
           <div style="font-size:18px;font-weight:700;color:#111827;line-height:1.35;">{{ .TargetName }}</div>
           <div style="margin-top:6px;color:#6b7280;font-size:12px;line-height:1.6;">
             订单号：<span style="color:#111827;font-weight:600;">{{ .OrderID }}</span>
-            {{ if .TraceID }}<span style="margin-left:10px;">Trace：{{ .TraceID }}</span>{{ end }}
           </div>
 
           <div style="margin-top:16px;border:1px solid #eef0f6;border-radius:12px;overflow:hidden;">
@@ -263,12 +263,12 @@ var emailHTMLTpl = template.Must(template.New("email").Parse(`
           </div>
 
           <div style="margin-top:14px;color:#9ca3af;font-size:12px;line-height:1.6;">
-            如果你未发起此操作，请检查账号与 Token 配置。
+            此邮件由系统自动发送
           </div>
         </div>
       </div>
       <div style="text-align:center;margin-top:12px;color:#9ca3af;font-size:12px;">
-        © sniping_engine
+        © 抢购助手
       </div>
     </div>
   </body>
@@ -285,10 +285,6 @@ func buildEmailBody(evt OrderCreatedEvent) (htmlBody string, textBody string, er
 	if name == "" {
 		name = "未知商品"
 	}
-	mode := strings.TrimSpace(evt.Mode)
-	if mode == "" {
-		mode = "-"
-	}
 	qty := evt.Quantity
 	if qty <= 0 {
 		qty = 1
@@ -302,22 +298,17 @@ func buildEmailBody(evt OrderCreatedEvent) (htmlBody string, textBody string, er
 	rows := []rowKV{
 		{K: "时间", V: at.Format("2006-01-02 15:04:05")},
 		{K: "账号", V: safeText(evt.Mobile, evt.AccountID)},
-		{K: "模式", V: mode},
+		{K: "模式", V: modeLabel(evt.Mode)},
 		{K: "数量", V: strconv.Itoa(qty)},
-		{K: "itemId / skuId", V: joinIDs(evt.ItemID, evt.SKUID)},
-		{K: "shopId", V: strconv.FormatInt(evt.ShopID, 10)},
-		{K: "任务ID", V: evt.TargetID},
 	}
 
 	data := struct {
 		TargetName string
 		OrderID    string
-		TraceID    string
 		Rows       []rowKV
 	}{
 		TargetName: name,
 		OrderID:    evt.OrderID,
-		TraceID:    evt.TraceID,
 		Rows:       rows,
 	}
 
@@ -327,13 +318,10 @@ func buildEmailBody(evt OrderCreatedEvent) (htmlBody string, textBody string, er
 	}
 
 	text := new(strings.Builder)
-	text.WriteString("抢购成功\n")
+	text.WriteString("下单成功\n")
 	text.WriteString("商品：" + name + "\n")
 	if evt.OrderID != "" {
 		text.WriteString("订单号：" + evt.OrderID + "\n")
-	}
-	if evt.TraceID != "" {
-		text.WriteString("Trace：" + evt.TraceID + "\n")
 	}
 	for _, r := range rows {
 		text.WriteString(r.K + "：" + r.V + "\n")
@@ -350,11 +338,13 @@ func safeText(prefer, fallback string) string {
 	return strings.TrimSpace(fallback)
 }
 
-func joinIDs(itemID, skuID int64) string {
-	item := strconv.FormatInt(itemID, 10)
-	sku := strconv.FormatInt(skuID, 10)
-	if item == "0" && sku == "0" {
-		return "-"
+func modeLabel(mode string) string {
+	switch strings.ToLower(strings.TrimSpace(mode)) {
+	case "scan":
+		return "扫货"
+	case "rush":
+		return "抢购"
+	default:
+		return "抢购"
 	}
-	return item + " / " + sku
 }

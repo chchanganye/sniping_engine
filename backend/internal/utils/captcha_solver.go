@@ -75,6 +75,11 @@ type Point struct {
 
 // SolveAliyunCaptcha 执行验证码验证并返回 Base64 编码的结果
 func SolveAliyunCaptcha(timestamp int64, dracoToken string) (string, error) {
+	return SolveAliyunCaptchaWithContext(context.Background(), timestamp, dracoToken)
+}
+
+// SolveAliyunCaptchaWithContext 执行验证码验证并返回 Base64 编码的结果（支持 ctx 取消）
+func SolveAliyunCaptchaWithContext(parent context.Context, timestamp int64, dracoToken string) (string, error) {
 	rand.Seed(time.Now().UnixNano())
 
 	// 构造目标 URL
@@ -96,7 +101,7 @@ func SolveAliyunCaptcha(timestamp int64, dracoToken string) (string, error) {
 	page.MustEmulate(devices.IPhoneX)
 
 	// 设置总超时时间
-	ctx, cancel := context.WithTimeout(context.Background(), 360*time.Second)
+	ctx, cancel := context.WithTimeout(parent, 360*time.Second)
 	defer cancel()
 
 	router := page.HijackRequests()

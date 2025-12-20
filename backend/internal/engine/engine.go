@@ -16,6 +16,7 @@ import (
 	"sniping_engine/internal/notify"
 	"sniping_engine/internal/provider"
 	"sniping_engine/internal/store/sqlite"
+	"sniping_engine/internal/utils"
 )
 
 type Options struct {
@@ -509,8 +510,31 @@ func (e *Engine) TestBuyOnce(ctx context.Context, targetID string, captchaVerify
 		return TestBuyResult{CanBuy: false, NeedCaptcha: pre.NeedCaptcha, Success: false, TraceID: pre.TraceID, Message: "当前不可购买"}, nil
 	}
 
-	if pre.NeedCaptcha {
-		progress("captcha", "info", "需要验证码，将自动处理", nil)
+	if pre.NeedCaptcha && strings.TrimSpace(target.CaptchaVerifyParam) == "" {
+		progress("captcha", "start", "正在通过验证码…", nil)
+		timestamp := time.Now().UnixMilli()
+		dracoToken := ""
+		for _, cookieEntry := range acc.Cookies {
+			for _, cookie := range cookieEntry.Cookies {
+				if cookie.Name == "draco_local" {
+					dracoToken = cookie.Value
+					break
+				}
+			}
+			if dracoToken != "" {
+				break
+			}
+		}
+		captchaVerifyParam, err := utils.SolveAliyunCaptchaWithContext(ctx, timestamp, dracoToken)
+		if err != nil {
+			progress("captcha", "error", "验证码处理失败："+err.Error(), nil)
+			return TestBuyResult{}, err
+		}
+		if strings.TrimSpace(captchaVerifyParam) == "" {
+			progress("captcha", "error", "验证码处理失败：返回为空", nil)
+			return TestBuyResult{}, errors.New("captcha solving returned empty result")
+		}
+		target.CaptchaVerifyParam = strings.TrimSpace(captchaVerifyParam)
 	}
 
 	if !e.waitLimits(ctx, acc.ID) {
