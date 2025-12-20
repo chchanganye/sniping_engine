@@ -34,6 +34,7 @@ func (s *Store) migrate(ctx context.Context) error {
 			target_qty INTEGER NOT NULL,
 			per_order_qty INTEGER NOT NULL,
 			rush_at_ms INTEGER NOT NULL DEFAULT 0,
+			rush_lead_ms INTEGER NOT NULL DEFAULT 500,
 			captcha_verify_param TEXT NOT NULL DEFAULT '',
 			enabled INTEGER NOT NULL DEFAULT 1,
 			created_at INTEGER NOT NULL,
@@ -81,6 +82,12 @@ func (s *Store) migrate(ctx context.Context) error {
 	if _, err := s.db.ExecContext(ctx, `ALTER TABLE targets ADD COLUMN captcha_verify_param TEXT NOT NULL DEFAULT ''`); err != nil {
 		if !strings.Contains(strings.ToLower(err.Error()), "duplicate") {
 			return fmt.Errorf("migrate targets.captcha_verify_param: %w", err)
+		}
+	}
+
+	if _, err := s.db.ExecContext(ctx, `ALTER TABLE targets ADD COLUMN rush_lead_ms INTEGER NOT NULL DEFAULT 500`); err != nil {
+		if !strings.Contains(strings.ToLower(err.Error()), "duplicate") {
+			return fmt.Errorf("migrate targets.rush_lead_ms: %w", err)
 		}
 	}
 

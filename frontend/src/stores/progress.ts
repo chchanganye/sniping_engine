@@ -180,7 +180,7 @@ export const useProgressStore = defineStore('progress', {
       notifyOpID = id
       notifyType = type
       notifyHandle = ElNotification({
-        title: session.title || '执行进度',
+        title: '',
         message: h(ProgressNotifyView, { opId: id }),
         type,
         customClass: 'progress-notify',

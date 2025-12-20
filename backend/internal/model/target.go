@@ -20,6 +20,7 @@ type Target struct {
 	TargetQty          int        `json:"targetQty"`
 	PerOrderQty        int        `json:"perOrderQty"`
 	RushAtMs           int64      `json:"rushAtMs,omitempty"`
+	RushLeadMs         int64      `json:"rushLeadMs,omitempty"`
 	CaptchaVerifyParam string     `json:"captchaVerifyParam,omitempty"`
 	Enabled            bool       `json:"enabled"`
 	CreatedAt          time.Time  `json:"createdAt"`

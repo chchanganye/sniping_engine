@@ -54,6 +54,7 @@ function mapTargetToTask(target: BackendTarget, engine: EngineState | null): Tas
     targetQty: target.targetQty,
     perOrderQty: target.perOrderQty,
     rushAtMs: typeof target.rushAtMs === 'number' && target.rushAtMs > 0 ? target.rushAtMs : undefined,
+    rushLeadMs: typeof target.rushLeadMs === 'number' && target.rushLeadMs > 0 ? target.rushLeadMs : 500,
     enabled: Boolean(target.enabled),
     status: normalizeTaskStatus(target, state, Boolean(engine?.running)),
     purchasedQty,
@@ -145,6 +146,7 @@ export const useTasksStore = defineStore('tasks', {
         targetQty: existing?.targetQty ?? 1,
         perOrderQty: existing?.perOrderQty ?? 1,
         rushAtMs: existing?.rushAtMs ?? 0,
+        rushLeadMs: existing?.rushLeadMs ?? 500,
         enabled: existing?.enabled ?? false,
       })
 
@@ -153,13 +155,14 @@ export const useTasksStore = defineStore('tasks', {
       if (idx >= 0) this.tasks.splice(idx, 1, mapped)
       else this.tasks.unshift(mapped)
     },
-    async updateTask(id: string, patch: Partial<Pick<Task, 'mode' | 'targetQty' | 'perOrderQty' | 'rushAtMs' | 'enabled' | 'goodsTitle'>>) {
+    async updateTask(id: string, patch: Partial<Pick<Task, 'mode' | 'targetQty' | 'perOrderQty' | 'rushAtMs' | 'rushLeadMs' | 'enabled' | 'goodsTitle'>>) {
       const current = this.tasks.find((t) => t.id === id)
       if (!current) return
 
       const next: Task = { ...current, ...patch }
       if (next.targetQty <= 0) next.targetQty = 1
       if (next.perOrderQty <= 0) next.perOrderQty = 1
+      if (!Number.isFinite(Number(next.rushLeadMs)) || Number(next.rushLeadMs) <= 0) next.rushLeadMs = 500
 
       const saved = await beUpsertTarget({
         id: next.id,
@@ -172,6 +175,7 @@ export const useTasksStore = defineStore('tasks', {
         targetQty: next.targetQty,
         perOrderQty: next.perOrderQty,
         rushAtMs: next.mode === 'rush' ? next.rushAtMs ?? 0 : 0,
+        rushLeadMs: next.mode === 'rush' ? next.rushLeadMs ?? 500 : 500,
         enabled: next.enabled,
       })
 
@@ -200,6 +204,7 @@ export const useTasksStore = defineStore('tasks', {
           targetQty: t.targetQty,
           perOrderQty: t.perOrderQty,
           rushAtMs: t.rushAtMs,
+          rushLeadMs: t.rushLeadMs,
           enabled: t.enabled,
         } as BackendTarget, this.engine))
       } finally {
@@ -212,6 +217,34 @@ export const useTasksStore = defineStore('tasks', {
         await beEngineStop()
         this.engine = await beEngineState().catch(() => ({ running: false, tasks: [] }))
         await this.refresh()
+      } finally {
+        this.engineLoading = false
+      }
+    },
+
+    async setAllEnabled(enabled: boolean) {
+      this.engineLoading = true
+      try {
+        // 引擎只在启动时读取“已启用任务”，因此这里用“停止 -> 批量更新 ->（可选）启动”确保生效
+        const wasRunning = Boolean(this.engine?.running)
+        if (wasRunning) {
+          await beEngineStop().catch(() => null)
+        }
+
+        for (const t of this.tasks) {
+          if (t.enabled === enabled) continue
+          await this.updateTask(t.id, { enabled })
+        }
+
+        await this.refresh()
+
+        if (enabled) {
+          await beEngineStart()
+          this.engine = await beEngineState()
+          await this.refresh()
+        } else {
+          this.engine = await beEngineState().catch(() => ({ running: false, tasks: [] }))
+        }
       } finally {
         this.engineLoading = false
       }

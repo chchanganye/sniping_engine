@@ -224,11 +224,16 @@ func (e *Engine) runTarget(ctx context.Context, target model.Target) {
 	}()
 
 	if target.Mode == model.TargetModeRush && target.RushAtMs > 0 {
-		startAt := time.UnixMilli(target.RushAtMs)
+		leadMs := target.RushLeadMs
+		if leadMs <= 0 {
+			leadMs = 500
+		}
+		startAt := time.UnixMilli(target.RushAtMs - leadMs)
 		if e.bus != nil {
 			e.bus.Log("info", "等待开抢时间", map[string]any{
 				"targetId": target.ID,
 				"startAt":  startAt.Format(time.RFC3339Nano),
+				"leadMs":   leadMs,
 			})
 		}
 		if !sleepUntil(ctx, startAt) {

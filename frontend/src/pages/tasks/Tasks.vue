@@ -52,22 +52,26 @@ async function refreshAll(forceCaptcha = false) {
   }
 }
 
-async function start() {
+async function enableAll() {
+  if (tasks.value.length === 0) {
+    ElMessage.warning('暂无任务')
+    return
+  }
   if (accounts.value.length === 0) {
     ElMessage.warning('请先添加账号')
     return
   }
-  if (enabledCount.value === 0) {
-    ElMessage.warning('请先启用至少 1 个目标任务')
-    return
-  }
-  await tasksStore.startEngine()
-  ElMessage.success('已启动')
+  await tasksStore.setAllEnabled(true)
+  ElMessage.success('已开启全部任务')
 }
 
-async function stop() {
-  await tasksStore.stopEngine()
-  ElMessage.warning('已停止')
+async function disableAll() {
+  if (tasks.value.length === 0) {
+    ElMessage.warning('暂无任务')
+    return
+  }
+  await tasksStore.setAllEnabled(false)
+  ElMessage.warning('已停止全部任务')
 }
 
 async function remove(row: Task) {
@@ -108,6 +112,12 @@ function onRushAtChange(row: Task, value: Date | null) {
   void tasksStore.updateTask(row.id, { rushAtMs: ms })
 }
 
+function onRushLeadChange(row: Task, value: number | null | undefined) {
+  const v = typeof value === 'number' && Number.isFinite(value) ? value : 500
+  row.rushLeadMs = v
+  void tasksStore.updateTask(row.id, { rushLeadMs: v })
+}
+
 function statusMeta(row: Task) {
   if (!row.enabled) return { type: 'info' as const, text: '未监控' }
   switch (row.status) {
@@ -120,7 +130,7 @@ function statusMeta(row: Task) {
     case 'stopped':
       return { type: 'info' as const, text: '已停止' }
     case 'running':
-      return { type: 'primary' as const, text: row.mode === 'scan' ? '监控中' : '抢购中' }
+      return { type: 'primary' as const, text: row.mode === 'scan' ? '扫货中' : '抢购中' }
     default:
       return { type: 'info' as const, text: engineRunning.value ? '执行中' : '未运行' }
   }
@@ -139,8 +149,8 @@ function statusMeta(row: Task) {
         </div>
         <el-space :size="8" wrap>
           <el-button :loading="loading || captchaLoading" :icon="Refresh" @click="refreshAll(true)">刷新</el-button>
-          <el-button type="success" :disabled="engineRunning" :loading="engineLoading" @click="start">开始执行</el-button>
-          <el-button type="warning" :disabled="!engineRunning" :loading="engineLoading" @click="stop">停止执行</el-button>
+          <el-button type="success" :loading="engineLoading" @click="enableAll">开启全部</el-button>
+          <el-button type="warning" :loading="engineLoading" @click="disableAll">停止全部</el-button>
         </el-space>
       </div>
 
@@ -191,6 +201,23 @@ function statusMeta(row: Task) {
               style="width: 100%"
               :disabled="engineRunning"
               @update:model-value="(v: Date | null) => onRushAtChange(row, v)"
+            />
+            <span v-else style="color: #c0c4cc">-</span>
+          </template>
+        </el-table-column>
+
+        <el-table-column label="提前轮询(ms)" width="150">
+          <template #default="{ row }">
+            <el-input-number
+              v-if="row.mode === 'rush'"
+              :model-value="row.rushLeadMs ?? 500"
+              :min="0"
+              :max="3600000"
+              size="small"
+              controls-position="right"
+              style="width: 100%"
+              :disabled="engineRunning"
+              @update:model-value="(v: number | null) => onRushLeadChange(row, v)"
             />
             <span v-else style="color: #c0c4cc">-</span>
           </template>

@@ -54,22 +54,32 @@ function pickOrderId(): string {
   return ''
 }
 
+function cleanTitle(title: string) {
+  const s = (title || '').trim()
+  if (!s) return ''
+  if (s.startsWith('测试抢购：')) return s.slice('测试抢购：'.length).trim()
+  if (s.startsWith('抢购：')) return s.slice('抢购：'.length).trim()
+  return s
+}
+
 const ui = computed(() => {
   const s = session.value
   const ev = lastEvent.value
   const status = s?.status ?? 'running'
+  const subject = cleanTitle(s?.title ?? '')
+  const prefix = subject ? `${subject}：` : ''
 
   if (status === 'success') {
     const orderId = pickOrderId()
-    return { icon: CircleCheckFilled, text: orderId ? `抢购成功（订单号：${orderId}）` : '抢购成功' }
+    return { icon: CircleCheckFilled, text: orderId ? `${prefix}抢购成功（订单号：${orderId}）` : `${prefix}抢购成功` }
   }
   if (status === 'error') {
     const reason = normalizeErrorText(ev?.message ?? '') || normalizeErrorText(String(ev?.fields?.error ?? '')) || '请稍后重试'
-    return { icon: CircleCloseFilled, text: `抢购失败：${reason}` }
+    return { icon: CircleCloseFilled, text: `${prefix}抢购失败：${reason}` }
   }
   if (status === 'warning') {
     const reason = (ev?.message ?? '').trim() || '需要处理'
-    return { icon: WarningFilled, text: `提示：${reason}` }
+    return { icon: WarningFilled, text: `${prefix}提示：${reason}` }
   }
 
   const api = typeof ev?.fields?.api === 'string' ? ev.fields.api.trim() : ''
@@ -78,14 +88,14 @@ const ui = computed(() => {
   if (step === 'captcha') {
     const startedAt = ev?.time ?? Date.now()
     const attempt = Math.min(9, Math.max(1, Math.floor((tick.value - startedAt) / 4500) + 1))
-    return { icon: Loading, loading: true, text: `正在第 ${attempt} 次滑动验证码…` }
+    return { icon: Loading, loading: true, text: attempt <= 1 ? `${prefix}正在通过验证码…` : `${prefix}正在通过验证码（第 ${attempt} 次尝试）…` }
   }
-  if (api.includes('/api/trade/buy/render-order')) return { icon: Loading, loading: true, text: '正在发送预下单请求…' }
-  if (api.includes('/api/trade/buy/create-order')) return { icon: Loading, loading: true, text: '正在提交订单…' }
-  if (step === 'render_order') return { icon: Loading, loading: true, text: '正在预下单（确认可购买与价格）…' }
-  if (step === 'create_order') return { icon: Loading, loading: true, text: '正在创建订单…' }
+  if (api.includes('/api/trade/buy/render-order')) return { icon: Loading, loading: true, text: `${prefix}正在发送预下单请求…` }
+  if (api.includes('/api/trade/buy/create-order')) return { icon: Loading, loading: true, text: `${prefix}正在提交订单…` }
+  if (step === 'render_order') return { icon: Loading, loading: true, text: `${prefix}正在预下单（确认可购买与价格）…` }
+  if (step === 'create_order') return { icon: Loading, loading: true, text: `${prefix}正在创建订单…` }
 
-  return { icon: Loading, loading: true, text: '正在抢购中…' }
+  return { icon: Loading, loading: true, text: `${prefix}正在抢购中…` }
 })
 </script>
 

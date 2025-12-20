@@ -202,6 +202,7 @@ func (s *Server) handleTargets(w http.ResponseWriter, r *http.Request) {
 			TargetQty          int              `json:"targetQty"`
 			PerOrderQty        int              `json:"perOrderQty"`
 			RushAtMs           int64            `json:"rushAtMs,omitempty"`
+			RushLeadMs         *int64           `json:"rushLeadMs,omitempty"`
 			CaptchaVerifyParam *string          `json:"captchaVerifyParam,omitempty"`
 			Enabled            bool             `json:"enabled"`
 		}
@@ -224,6 +225,13 @@ func (s *Server) handleTargets(w http.ResponseWriter, r *http.Request) {
 			PerOrderQty: body.PerOrderQty,
 			RushAtMs:    body.RushAtMs,
 			Enabled:     body.Enabled,
+		}
+		if body.RushLeadMs != nil {
+			next.RushLeadMs = *body.RushLeadMs
+		} else if next.ID != "" {
+			if current, err := s.store.GetTarget(r.Context(), next.ID); err == nil {
+				next.RushLeadMs = current.RushLeadMs
+			}
 		}
 		if body.CaptchaVerifyParam != nil {
 			next.CaptchaVerifyParam = strings.TrimSpace(*body.CaptchaVerifyParam)

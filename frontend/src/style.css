@@ -37,3 +37,16 @@ body {
 .progress-notify .el-notification__group {
   margin-left: 0;
 }
+
+.progress-notify.el-notification {
+  width: 340px;
+  padding: 12px 14px;
+}
+
+.progress-notify .el-notification__title {
+  display: none;
+}
+
+.progress-notify .el-notification__content {
+  margin: 0;
+}
