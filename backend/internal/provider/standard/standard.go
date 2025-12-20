@@ -10,6 +10,7 @@ import (
 	"net/url"
 	"strconv"
 	"strings"
+	"time"
 
 	"github.com/go-resty/resty/v2"
 
@@ -17,6 +18,7 @@ import (
 	"sniping_engine/internal/logbus"
 	"sniping_engine/internal/model"
 	"sniping_engine/internal/provider"
+	"sniping_engine/internal/utils"
 )
 
 type StandardProvider struct {
@@ -247,9 +249,34 @@ func (p *StandardProvider) CreateOrder(ctx context.Context, account model.Accoun
 	}
 
 	captchaVerifyParam := strings.TrimSpace(target.CaptchaVerifyParam)
+	fmt.Printf("DEBUG: target.CaptchaVerifyParam='%s', NeedCaptcha=%v\n", captchaVerifyParam, preflight.NeedCaptcha)
 	if preflight.NeedCaptcha {
 		if captchaVerifyParam == "" {
-			return provider.CreateResult{}, account, errors.New("需要验证码：请先为该目标任务配置 captchaVerifyParam")
+			// 需要验证码但没有提供，调用验证码解决方法
+			fmt.Println("DEBUG: invoking utils.SolveAliyunCaptcha...")
+			timestamp := time.Now().UnixMilli()
+			// 从cookie中提取dracoToken
+			dracoToken := ""
+			for _, cookieEntry := range account.Cookies {
+				for _, cookie := range cookieEntry.Cookies {
+					if cookie.Name == "draco_local" {
+						dracoToken = cookie.Value
+						break
+					}
+				}
+				if dracoToken != "" {
+					break
+				}
+			}
+
+			// 调用验证码解决方法
+			captchaVerifyParam, err = utils.SolveAliyunCaptcha(timestamp, dracoToken)
+			if err != nil {
+				return provider.CreateResult{}, model.Account{}, fmt.Errorf("failed to solve captcha: %v", err)
+			}
+			if captchaVerifyParam == "" {
+				return provider.CreateResult{}, model.Account{}, errors.New("captcha solving returned empty result")
+			}
 		}
 	} else {
 		captchaVerifyParam = ""

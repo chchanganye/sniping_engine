@@ -9,6 +9,7 @@ export interface Account {
   deviceId?: string
   uuid?: string
   proxy?: string
+  cookies?: any[]
   status: AccountStatus
   createdAt?: string
   updatedAt?: string

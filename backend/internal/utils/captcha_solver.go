@@ -1,4 +1,4 @@
-package main
+package utils
 
 import (
 	"bytes"
@@ -30,6 +30,9 @@ const (
 
 	// ⬇️ 滑动偏移量
 	SlideOffset = 0.0
+
+	// ⬇️ 无头模式开关：false 表示显示浏览器窗口（方便调试），true 表示无头模式（生产环境使用）
+	HeadlessMode = false
 )
 
 // API 结构体
@@ -71,8 +74,6 @@ type Point struct {
 }
 
 // SolveAliyunCaptcha 执行验证码验证并返回 Base64 编码的结果
-// timestamp: 请求时间戳 (例如 1766113292639)
-// dracoToken: 用户凭证 (draco_local)
 func SolveAliyunCaptcha(timestamp int64, dracoToken string) (string, error) {
 	rand.Seed(time.Now().UnixNano())
 
@@ -82,24 +83,21 @@ func SolveAliyunCaptcha(timestamp int64, dracoToken string) (string, error) {
 		timestamp, dracoToken,
 	)
 
-	// 1. 启动浏览器 (默认开启 Headless 模式以供后台调用)
-	// 如果需要调试，可以将 Headless(true) 改为 Headless(false)
-	u := launcher.New().Headless(true).MustLaunch()
+	// 1. 启动浏览器
+	u := launcher.New().Headless(HeadlessMode).MustLaunch()
 	browser := rod.New().ControlURL(u).MustConnect()
 
-	// 确保函数结束时关闭浏览器资源
 	defer func() {
 		_ = browser.Close()
-		_ = launcher.New().Kill() // 确保清理僵尸进程
+		launcher.New().Kill()
 	}()
 
 	page := stealth.MustPage(browser)
 	page.MustEmulate(devices.IPhoneX)
 
-	// 设置总超时时间 (例如 60秒)，防止无限挂起
+	// 设置总超时时间 (60秒)
 	ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
 	defer cancel()
-	page = page.Context(ctx)
 
 	router := page.HijackRequests()
 	defer router.MustStop()
@@ -113,14 +111,17 @@ func SolveAliyunCaptcha(timestamp int64, dracoToken string) (string, error) {
 		retryCount    int
 		verifySuccess bool
 		pageSceneId   string
-		finalResult   string // 最终返回的 Base64 字符串
-		errResult     error  // 错误信息
+		finalResult   string
+		errResult     error
 	)
 
-	sliderElCh := make(chan *rod.Element, 10)
+	sliderElCh := make(chan *rod.Element, 100)
 	apiXCh := make(chan float64, 10)
-	// 通道传递结果字符串，空字符串表示失败
 	verifyResultCh := make(chan string, 10)
+
+	// 【新增】控制点击停止的信号
+	stopClicking := make(chan struct{})
+	var stopClickingOnce sync.Once
 
 	resetState := func() {
 		mu.Lock()
@@ -139,7 +140,7 @@ func SolveAliyunCaptcha(timestamp int64, dracoToken string) (string, error) {
 		}
 		hasTriggered = true
 
-		// fmt.Printf("⚡️ [第%d次] 请求打码...\n", retryCount+1)
+		fmt.Printf("⚡️ [第%d次] 图片集齐，请求打码...\n", retryCount+1)
 		go func() {
 			reqBody := solveRequest{
 				SlideImage:      shadowB64,
@@ -152,7 +153,7 @@ func SolveAliyunCaptcha(timestamp int64, dracoToken string) (string, error) {
 			client := &http.Client{Timeout: 5 * time.Second}
 			resp, err := client.Post(JfbymApiUrl, "application/json", bytes.NewReader(bs))
 			if err != nil {
-				// fmt.Println("❌ 打码请求失败:", err)
+				fmt.Println("❌ 打码请求失败:", err)
 				return
 			}
 			defer resp.Body.Close()
@@ -174,6 +175,7 @@ func SolveAliyunCaptcha(timestamp int64, dracoToken string) (string, error) {
 			for _, d := range items {
 				if d.Code == 0 {
 					val, _ := strconv.ParseFloat(d.Data, 64)
+					fmt.Printf("✅ 打码成功，坐标: %.2f\n", val)
 					apiXCh <- val
 					return
 				}
@@ -190,6 +192,7 @@ func SolveAliyunCaptcha(timestamp int64, dracoToken string) (string, error) {
 			mu.Lock()
 			backB64 = b64
 			mu.Unlock()
+			fmt.Println("🖼️ 拦截到背景图")
 			checkAndSolve()
 		}
 	})
@@ -201,6 +204,7 @@ func SolveAliyunCaptcha(timestamp int64, dracoToken string) (string, error) {
 			mu.Lock()
 			shadowB64 = b64
 			mu.Unlock()
+			fmt.Println("🖼️ 拦截到滑块图")
 			checkAndSolve()
 		}
 	})
@@ -223,10 +227,8 @@ func SolveAliyunCaptcha(timestamp int64, dracoToken string) (string, error) {
 					}
 					orderedJson, _ := json.Marshal(output)
 					jsonBase64 := base64.StdEncoding.EncodeToString(orderedJson)
-					// 发送成功结果
 					verifyResultCh <- jsonBase64
 				} else if !*res.Result.VerifyResult {
-					// 发送失败信号
 					verifyResultCh <- ""
 				}
 			}
@@ -235,11 +237,12 @@ func SolveAliyunCaptcha(timestamp int64, dracoToken string) (string, error) {
 	go router.Run()
 
 	// --- 3. 页面交互 ---
+	fmt.Println("🚀 打开页面...")
 	if err := page.Navigate(targetUrl); err != nil {
 		return "", fmt.Errorf("打开页面失败: %v", err)
 	}
 
-	// 提取 SceneId (带超时保护)
+	// 提取 SceneId
 	go func() {
 		_ = page.WaitLoad()
 		if result, err := page.Eval(`() => {
@@ -254,26 +257,50 @@ func SolveAliyunCaptcha(timestamp int64, dracoToken string) (string, error) {
 		}
 	}()
 
-	// 循环点击按钮
+	// ------------------------------------------------------------------
+	// 【关键修正】点击按钮协程
+	// 逻辑：一直尝试点击，直到收到 stopClicking 信号（即滑块可见）才停止
+	// ------------------------------------------------------------------
 	go func() {
-		ticker := time.NewTicker(500 * time.Millisecond)
+		selectors := []string{"#button", "#aliyunCaptcha-btn", "button[type='button']", ".btn"}
+		ticker := time.NewTicker(300 * time.Millisecond)
 		defer ticker.Stop()
+
 		for {
 			select {
 			case <-ctx.Done():
 				return
+			case <-stopClicking: // 收到停止信号，退出
+				fmt.Println("🛑 滑块已可见，停止点击按钮")
+				return
 			case <-ticker.C:
-				if el, err := page.Element("#button"); err == nil {
-					if v, _ := el.Visible(); v {
-						_ = el.Click(proto.InputMouseButtonLeft, 1)
-						return
+				clicked := false
+				for _, sel := range selectors {
+					if el, err := page.Element(sel); err == nil {
+						if v, _ := el.Visible(); v {
+							_ = el.ScrollIntoView()
+							_ = el.Click(proto.InputMouseButtonLeft, 1)
+							fmt.Printf("👉 点击验证按钮: %s\n", sel)
+							clicked = true
+							break
+						}
 					}
+				}
+				// 兜底 JS 点击
+				if !clicked {
+					_, _ = page.Eval(`() => {
+						let btn = document.getElementById('button');
+						if(btn) btn.click();
+					}`)
 				}
 			}
 		}
 	}()
 
-	// 循环找滑块
+	// ------------------------------------------------------------------
+	// 【关键修正】找滑块协程
+	// 逻辑：一旦滑块可见，立即发送 stopClicking 信号，并将滑块对象发给主流程
+	// ------------------------------------------------------------------
 	go func() {
 		ticker := time.NewTicker(50 * time.Millisecond)
 		defer ticker.Stop()
@@ -283,7 +310,14 @@ func SolveAliyunCaptcha(timestamp int64, dracoToken string) (string, error) {
 				return
 			case <-ticker.C:
 				if el, err := page.Element("#aliyunCaptcha-sliding-slider"); err == nil {
+					// 必须确保 Visible 为 true
 					if v, _ := el.Visible(); v {
+						// 1. 发出停止点击信号 (只发一次，避免 panic)
+						stopClickingOnce.Do(func() {
+							close(stopClicking)
+						})
+
+						// 2. 发送滑块对象
 						select {
 						case sliderElCh <- el:
 						default:
@@ -296,7 +330,6 @@ func SolveAliyunCaptcha(timestamp int64, dracoToken string) (string, error) {
 
 	// --- 4. 验证循环 ---
 	for !verifySuccess {
-		// 检查总超时
 		select {
 		case <-ctx.Done():
 			return "", errors.New("验证流程超时")
@@ -304,7 +337,7 @@ func SolveAliyunCaptcha(timestamp int64, dracoToken string) (string, error) {
 		}
 
 		retryCount++
-		// fmt.Printf("⏳ [第%d次] 等待...\n", retryCount)
+		fmt.Printf("⏳ [第%d次] 等待...\n", retryCount)
 
 		var sliderEl *rod.Element
 		var apiX float64
@@ -312,7 +345,6 @@ func SolveAliyunCaptcha(timestamp int64, dracoToken string) (string, error) {
 		gotSlider := false
 		gotApiX := false
 
-		// 等待资源
 	loopWait:
 		for !gotSlider || !gotApiX {
 			select {
@@ -334,71 +366,120 @@ func SolveAliyunCaptcha(timestamp int64, dracoToken string) (string, error) {
 		// 计算目标距离
 		offset := (rand.Float64()*0.2 - 0.1)
 		finalDistance := apiX + SlideOffset + offset
+		fmt.Printf("🧮 目标距离: %.2f\n", finalDistance)
 
 		// 获取起点
 		box := sliderEl.MustShape().Box()
 		startX := box.X + box.Width/2
 		startY := box.Y + box.Height/2
 
-		// 1. 按下
+		// 1. 按下滑块
 		page.Mouse.MustMoveTo(startX, startY)
 		time.Sleep(time.Duration(100+rand.Intn(50)) * time.Millisecond)
 		page.Mouse.MustDown(proto.InputMouseButtonLeft)
 		time.Sleep(time.Duration(50+rand.Intn(50)) * time.Millisecond)
 
-		// 2. 生成贝塞尔轨迹 (带过冲效果)
-		overshoot := finalDistance + 3.0 + rand.Float64()*2.0
+		// -----------------------------------------------------------
+		// 2. 自适应滑动策略 (高精度版 - 容差 0.8)
+		// -----------------------------------------------------------
+		fmt.Println("🔄 开始自适应滑动策略...")
 
-		track1 := generateBezierTrack(startX, startY, startX+overshoot, startY, 20)
-		executeTrack(page, track1)
-
-		time.Sleep(time.Duration(50+rand.Intn(50)) * time.Millisecond)
-
-		track2 := generateBezierTrack(startX+overshoot, startY, startX+finalDistance, startY, 10)
-		executeTrack(page, track2)
-
-		// 3. 闭环修正
-		correctionTimeout := time.After(5 * time.Second)
-	correctionLoop:
-		for {
-			select {
-			case <-correctionTimeout:
-				break correctionLoop
-			default:
-				// 使用 Eval 避免元素过期
-				res, err := page.Eval(`() => {
-					let el = document.querySelector('#aliyunCaptcha-puzzle');
-					if (!el) return -1;
-					return parseFloat(el.style.left) || 0;
-				}`)
-
-				if err != nil {
-					time.Sleep(50 * time.Millisecond)
-					continue
+		// 定义获取滑块当前位置的函数
+		getPuzzlePos := func() float64 {
+			res, _ := page.Eval(`() => {
+				let el = document.querySelector('#aliyunCaptcha-puzzle');
+				if (!el) return -1;
+				// 兼容 left 和 transform 两种位移方式
+				let left = parseFloat(el.style.left) || 0;
+				if (left === 0) {
+					let transform = el.style.transform;
+					let match = transform.match(/translate\(([-\d.]+)px/);
+					if (match) return parseFloat(match[1]);
 				}
-
-				currentPuzzleLeft := res.Value.Num()
-				if currentPuzzleLeft <= 0 && finalDistance > 10 {
-					time.Sleep(20 * time.Millisecond)
-					continue
-				}
-
-				diff := finalDistance - currentPuzzleLeft
-				if math.Abs(diff) < 2.0 {
-					break correctionLoop
-				}
-
-				currentMouseX := startX + currentPuzzleLeft + diff // 修正鼠标位置
-				page.Mouse.MustMoveTo(currentMouseX, startY+(rand.Float64()-0.5))
-				time.Sleep(50 * time.Millisecond)
-			}
+				return left;
+			}`)
+			return res.Value.Num()
 		}
 
-		// 4. 强制锚定 + 停顿
-		page.Mouse.MustMoveTo(startX+finalDistance, startY)
-		time.Sleep(time.Duration(300+rand.Intn(200)) * time.Millisecond)
+		// 初始滑动 (先滑到理论位置)
+		currentMouseX := startX + finalDistance
 
-		// 5. 松开
+		// 简单移动到初步位置
+		page.Mouse.MustMoveTo(currentMouseX, startY)
+		time.Sleep(time.Duration(200) * time.Millisecond)
+
+		// 定义目标位置和参数
+		targetPuzzlePos := finalDistance
+
+		// 【修改点1】将容差收紧到 0.8，确保误差在 1px 以内
+		tolerance := 0.8
+		maxAttempts := 30 // 增加尝试次数，因为高精度需要更多微调
+		success := false
+
+		attempt := 0
+		for ; attempt < maxAttempts; attempt++ {
+			currentPos := getPuzzlePos()
+			diff := targetPuzzlePos - currentPos
+
+			fmt.Printf("🔍 第%d次调整: 滑块位置=%.2f, 目标=%.2f, 差异=%.2f\n", attempt+1, currentPos, targetPuzzlePos, diff)
+
+			// 检查是否在容差范围内
+			if math.Abs(diff) <= tolerance {
+				fmt.Println("✅ 已达到目标位置，停止调整")
+				success = true
+				break
+			}
+
+			// --- 核心修正逻辑 ---
+
+			dampingFactor := 0.5
+
+			// 【修改点2】动态阻尼策略优化
+			// 距离大时保守(0.5)，距离近时稍微激进一点(0.9)，确保能推进最后 1px
+			absDiff := math.Abs(diff)
+			if absDiff < 3 {
+				// 距离非常近，几乎按 1:1 移动，否则容易因为移动太小被忽略
+				dampingFactor = 0.9
+			} else if absDiff < 10 {
+				dampingFactor = 0.7
+			} else {
+				dampingFactor = 0.5
+			}
+
+			moveStep := diff * dampingFactor
+
+			// 限制单次最大修正幅度
+			if moveStep > 30 {
+				moveStep = 30
+			} else if moveStep < -30 {
+				moveStep = -30
+			}
+
+			currentMouseX += moveStep
+
+			// 添加微小的随机 Y 轴抖动
+			randomY := startY + (rand.Float64()*2 - 1)
+
+			fmt.Printf("🎯 修正鼠标: 步长=%.2f, 新鼠标X=%.2f\n", moveStep, currentMouseX)
+
+			// 执行移动
+			page.Mouse.MustMoveTo(currentMouseX, randomY)
+
+			// 必须有足够的停顿让页面 JS 响应动画
+			time.Sleep(time.Duration(150+rand.Intn(100)) * time.Millisecond)
+		}
+
+		// 最终位置检查
+		finalPos := getPuzzlePos()
+		fmt.Printf("🏁 最终滑块位置: %.2f, 目标: %.2f, 最终差异: %.2f\n", finalPos, targetPuzzlePos, finalPos-targetPuzzlePos)
+
+		if success {
+			fmt.Println("🎉 调整成功！")
+		} else {
+			fmt.Printf("⚠️ 调整超时，已尝试%d次\n", attempt)
+		}
+		// 4. 停顿后松开滑块
+		time.Sleep(time.Duration(300+rand.Intn(200)) * time.Millisecond)
 		page.Mouse.MustUp(proto.InputMouseButtonLeft)
 
 		// 等待结果
@@ -407,11 +488,16 @@ func SolveAliyunCaptcha(timestamp int64, dracoToken string) (string, error) {
 			if resStr != "" {
 				verifySuccess = true
 				finalResult = resStr
+				// 打印最终的JSON结构，方便调试
+				fmt.Println("📋 最终验证码结果JSON:")
+				fmt.Println(finalResult)
 			} else {
+				fmt.Println("❌ 验证失败，重置状态...")
 				resetState()
 				time.Sleep(1 * time.Second)
 			}
 		case <-time.After(5 * time.Second):
+			fmt.Println("⚠️ 结果等待超时，重置...")
 			resetState()
 			time.Sleep(1 * time.Second)
 		case <-ctx.Done():

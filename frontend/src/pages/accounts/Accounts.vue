@@ -4,7 +4,7 @@ import type { FormInstance, FormRules } from 'element-plus'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import { storeToRefs } from 'pinia'
 import dayjs from 'dayjs'
-import { Delete, Edit, Key, Plus, Refresh, SwitchButton } from '@element-plus/icons-vue'
+import { CopyDocument, Delete, Edit, Key, Plus, Refresh, SwitchButton } from '@element-plus/icons-vue'
 import StatusTag from '@/components/StatusTag.vue'
 import type { Account } from '@/types/core'
 import { useAccountsStore } from '@/stores/accounts'
@@ -168,6 +168,42 @@ async function logout(row: Account) {
   ElMessage.success('已退出')
 }
 
+function copyCookies(row: Account) {
+  if (!row.cookies || row.cookies.length === 0) {
+    ElMessage.warning('该账号没有cookie信息')
+    return
+  }
+  
+  try {
+    // 查找draco_local cookie
+    let dracoValue = ''
+    for (const cookieEntry of row.cookies) {
+      if (cookieEntry.cookies) {
+        for (const cookie of cookieEntry.cookies) {
+          if (cookie.name === 'draco_local') {
+            dracoValue = cookie.value
+            break
+          }
+        }
+      }
+      if (dracoValue) {
+        break
+      }
+    }
+    
+    if (!dracoValue) {
+      ElMessage.warning('该账号没有draco_local cookie')
+      return
+    }
+    
+    // 复制draco_local的value到剪贴板
+    navigator.clipboard.writeText(dracoValue)
+    ElMessage.success('draco_local cookie值已复制到剪贴板')
+  } catch (e) {
+    ElMessage.error('复制cookie失败')
+  }
+}
+
 // Edit (proxy only)
 const editDialogVisible = ref(false)
 const editFormRef = ref<FormInstance>()
@@ -241,7 +277,7 @@ function formatTime(value?: string) {
             <span>{{ formatTime(row.updatedAt) }}</span>
           </template>
         </el-table-column>
-        <el-table-column label="操作" width="200" fixed="right">
+        <el-table-column label="操作" width="240" fixed="right">
           <template #default="{ row }">
             <el-space :size="8" wrap>
               <el-tooltip content="短信登录" placement="top">
@@ -261,6 +297,15 @@ function formatTime(value?: string) {
                   :icon="SwitchButton"
                   :disabled="row.status === 'logging_in' || !row.token"
                   @click="logout(row)"
+                />
+              </el-tooltip>
+              <el-tooltip content="复制Cookie" placement="top">
+                <el-button
+                  circle
+                  size="small"
+                  :icon="CopyDocument"
+                  :disabled="row.status === 'logging_in' || !row.token"
+                  @click="copyCookies(row)"
                 />
               </el-tooltip>
               <el-tooltip content="编辑代理" placement="top">

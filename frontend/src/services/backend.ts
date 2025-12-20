@@ -10,6 +10,7 @@ export interface BackendAccount {
   deviceId?: string
   uuid?: string
   proxy?: string
+  cookies?: any[]
   createdAt?: string
   updatedAt?: string
 }

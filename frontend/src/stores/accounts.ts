@@ -14,6 +14,7 @@ function normalizeAccount(raw: BackendAccount): Account {
     deviceId: typeof raw.deviceId === 'string' && raw.deviceId.trim() ? raw.deviceId : undefined,
     uuid: typeof raw.uuid === 'string' && raw.uuid.trim() ? raw.uuid : undefined,
     proxy: typeof raw.proxy === 'string' && raw.proxy.trim() ? raw.proxy : undefined,
+    cookies: raw.cookies,
     status: token ? 'logged_in' : 'idle',
     createdAt: raw.createdAt,
     updatedAt: raw.updatedAt,
