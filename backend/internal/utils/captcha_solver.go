@@ -412,7 +412,7 @@ func SolveAliyunCaptcha(timestamp int64, dracoToken string) (string, error) {
 		targetPuzzlePos := finalDistance
 
 		// 【修改点1】将容差收紧到 0.8，确保误差在 1px 以内
-		tolerance := 0.8
+		tolerance := 1
 		maxAttempts := 30 // 增加尝试次数，因为高精度需要更多微调
 		success := false
 
