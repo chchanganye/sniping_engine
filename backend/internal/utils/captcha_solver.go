@@ -32,7 +32,7 @@ const (
 	SlideOffset = 0.0
 
 	// ⬇️ 无头模式开关：false 表示显示浏览器窗口（方便调试），true 表示无头模式（生产环境使用）
-	HeadlessMode = false
+	HeadlessMode = true
 )
 
 // API 结构体
@@ -95,8 +95,8 @@ func SolveAliyunCaptcha(timestamp int64, dracoToken string) (string, error) {
 	page := stealth.MustPage(browser)
 	page.MustEmulate(devices.IPhoneX)
 
-	// 设置总超时时间 (60秒)
-	ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
+	// 设置总超时时间
+	ctx, cancel := context.WithTimeout(context.Background(), 360*time.Second)
 	defer cancel()
 
 	router := page.HijackRequests()
@@ -150,7 +150,7 @@ func SolveAliyunCaptcha(timestamp int64, dracoToken string) (string, error) {
 			}
 			bs, _ := json.Marshal(reqBody)
 
-			client := &http.Client{Timeout: 5 * time.Second}
+			client := &http.Client{Timeout: 10 * time.Second}
 			resp, err := client.Post(JfbymApiUrl, "application/json", bytes.NewReader(bs))
 			if err != nil {
 				fmt.Println("❌ 打码请求失败:", err)
@@ -222,7 +222,7 @@ func SolveAliyunCaptcha(timestamp int64, dracoToken string) (string, error) {
 					output := OutputResult{
 						CertifyId:     res.Result.CertifyId,
 						SceneId:       sceneId,
-						IsSign:        res.Result.IsSign,
+						IsSign:        true,
 						SecurityToken: res.Result.SecurityToken,
 					}
 					orderedJson, _ := json.Marshal(output)
