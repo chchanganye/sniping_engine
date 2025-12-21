@@ -1,0 +1,31 @@
+server:
+  addr: ":8090"
+  cors:
+    allowOrigins:
+      - "*"
+    allowCredentials: true
+
+storage:
+  sqlitePath: "./data/sniping_engine.db"
+
+proxy:
+  global: ""
+
+limits:
+  globalQPS: 5
+  globalBurst: 10
+  perAccountQPS: 1
+  perAccountBurst: 2
+  maxInFlight: 20
+
+task:
+  rushIntervalMs: 120
+  scanIntervalMs: 800
+
+provider:
+  baseURL: "https://m.4008117117.com"
+  timeoutMs: 20000
+  retry:
+    count: 2
+    waitMs: 200
+    maxWaitMs: 1200
