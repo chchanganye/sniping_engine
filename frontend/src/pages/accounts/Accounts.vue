@@ -20,18 +20,48 @@ onMounted(() => {
 // Add/Login (SMS) dialog
 const addDialogVisible = ref(false)
 const addFormRef = ref<FormInstance>()
+const loginMode = ref<'sms' | 'password'>('sms')
 const addForm = reactive({
   mobile: '',
   captchaCode: '',
   smsCode: '',
+  password: '',
 })
 const addRules: FormRules = {
   mobile: [
     { required: true, message: '请输入手机号', trigger: 'blur' },
     { pattern: /^1\d{10}$/, message: '手机号格式不正确', trigger: 'blur' },
   ],
-  captchaCode: [{ required: true, message: '请输入图形验证码', trigger: 'blur' }],
-  smsCode: [{ required: true, message: '请输入短信验证码', trigger: 'blur' }],
+  captchaCode: [
+    {
+      validator: (_rule, value, callback) => {
+        if (loginMode.value !== 'sms') return callback()
+        if (!String(value ?? '').trim()) return callback(new Error('请输入图形验证码'))
+        return callback()
+      },
+      trigger: 'blur',
+    },
+  ],
+  smsCode: [
+    {
+      validator: (_rule, value, callback) => {
+        if (loginMode.value !== 'sms') return callback()
+        if (!String(value ?? '').trim()) return callback(new Error('请输入短信验证码'))
+        return callback()
+      },
+      trigger: 'blur',
+    },
+  ],
+  password: [
+    {
+      validator: (_rule, value, callback) => {
+        if (loginMode.value !== 'password') return callback()
+        if (!String(value ?? '').trim()) return callback(new Error('请输入密码'))
+        return callback()
+      },
+      trigger: 'blur',
+    },
+  ],
 }
 const addCaptcha = reactive({
   token: '',
@@ -64,9 +94,11 @@ async function fetchAddCaptcha() {
 }
 
 async function openAdd() {
+  loginMode.value = 'sms'
   addForm.mobile = ''
   addForm.captchaCode = ''
   addForm.smsCode = ''
+  addForm.password = ''
   addCaptcha.token = ''
   addCaptcha.imageUrl = ''
   addDialogVisible.value = true
@@ -75,9 +107,11 @@ async function openAdd() {
 }
 
 async function openLogin(row: Account) {
+  loginMode.value = 'sms'
   addForm.mobile = row.mobile
   addForm.captchaCode = ''
   addForm.smsCode = ''
+  addForm.password = ''
   addCaptcha.token = ''
   addCaptcha.imageUrl = ''
   addDialogVisible.value = true
@@ -90,6 +124,7 @@ function closeAdd() {
   addForm.mobile = ''
   addForm.captchaCode = ''
   addForm.smsCode = ''
+  addForm.password = ''
   addCaptcha.token = ''
   addCaptcha.imageUrl = ''
   addSmsSending.value = false
@@ -142,10 +177,17 @@ async function submitAdd() {
   addSubmitting.value = true
   try {
     const existed = accounts.value.some((a) => a.mobile === addForm.mobile.trim())
-    await accountsStore.loginBySms({
-      mobile: addForm.mobile,
-      smsCode: addForm.smsCode,
-    })
+    if (loginMode.value === 'password') {
+      await accountsStore.loginByPassword({
+        mobile: addForm.mobile,
+        password: addForm.password,
+      })
+    } else {
+      await accountsStore.loginBySms({
+        mobile: addForm.mobile,
+        smsCode: addForm.smsCode,
+      })
+    }
     ElMessage.success(existed ? '登录成功' : '已新增并登录')
     closeAdd()
   } catch (e) {
@@ -322,13 +364,20 @@ function formatTime(value?: string) {
       <div v-if="accounts.length === 0" style="padding: 8px 0; color: #909399">暂无账号</div>
     </el-card>
 
-    <el-dialog v-model="addDialogVisible" title="短信登录" width="520px" destroy-on-close @close="closeAdd">
+    <el-dialog v-model="addDialogVisible" title="账号登录" width="520px" destroy-on-close @close="closeAdd">
       <el-form ref="addFormRef" :model="addForm" :rules="addRules" label-width="110px">
+        <el-form-item label="登录方式">
+          <el-radio-group v-model="loginMode">
+            <el-radio-button value="sms">短信登录</el-radio-button>
+            <el-radio-button value="password">密码登录</el-radio-button>
+          </el-radio-group>
+        </el-form-item>
+
         <el-form-item label="手机号" prop="mobile">
           <el-input v-model="addForm.mobile" placeholder="请输入手机号" autocomplete="off" />
         </el-form-item>
 
-        <el-form-item label="图形验证码" prop="captchaCode">
+        <el-form-item v-if="loginMode === 'sms'" label="图形验证码" prop="captchaCode">
           <div class="captcha-row">
             <el-input
               v-model="addForm.captchaCode"
@@ -351,13 +400,17 @@ function formatTime(value?: string) {
           </div>
         </el-form-item>
 
-        <el-form-item label="短信验证码" prop="smsCode">
+        <el-form-item v-if="loginMode === 'sms'" label="短信验证码" prop="smsCode">
           <div class="sms-row">
             <el-input v-model="addForm.smsCode" placeholder="请输入短信验证码" style="flex: 1" autocomplete="off" />
             <el-button :loading="addSmsSending" :disabled="addSmsCountdown > 0 || addSmsSending" @click="sendAddSmsCode">
               {{ addSmsCountdown > 0 ? `${addSmsCountdown}s 后重试` : '获取短信验证码' }}
             </el-button>
           </div>
+        </el-form-item>
+
+        <el-form-item v-if="loginMode === 'password'" label="密码" prop="password">
+          <el-input v-model="addForm.password" show-password placeholder="请输入密码" autocomplete="off" />
         </el-form-item>
       </el-form>
 

@@ -657,6 +657,10 @@ func (s *Server) handleUpstreamProxy(w http.ResponseWriter, r *http.Request) {
 		body, _ = io.ReadAll(r.Body)
 	}
 
+	if r.Method == http.MethodPost && r.URL.Path == "/api/user/web/login/identify" && len(body) > 0 {
+		body = transformIdentifyLoginBody(body)
+	}
+
 	token := extractToken(r)
 
 	var (
@@ -734,7 +738,7 @@ func (s *Server) handleUpstreamProxy(w http.ResponseWriter, r *http.Request) {
 		acc.Cookies = exportCookies(baseURL, jar)
 		_, _ = s.store.UpsertAccount(r.Context(), acc)
 	}
-	if token == "" && r.URL.Path == "/api/user/web/login/login-by-sms-code" {
+	if token == "" && (r.URL.Path == "/api/user/web/login/login-by-sms-code" || r.URL.Path == "/api/user/web/login/identify") {
 		_ = s.tryPersistLoginSession(r.Context(), body, resp.Body(), baseURL, jar)
 	}
 
@@ -751,11 +755,42 @@ func isAnonymousAllowedPath(path string) bool {
 	switch path {
 	case "/api/user/web/get-captcha",
 		"/api/user/web/login/login-send-sms-code",
-		"/api/user/web/login/login-by-sms-code":
+		"/api/user/web/login/login-by-sms-code",
+		"/api/user/web/login/identify":
 		return true
 	default:
 		return false
 	}
+}
+
+func transformIdentifyLoginBody(body []byte) []byte {
+	var m map[string]any
+	if err := json.Unmarshal(body, &m); err != nil || m == nil {
+		return body
+	}
+
+	pwd, _ := m["password"].(string)
+	pwd = strings.TrimSpace(pwd)
+	if pwd != "" {
+		// 如果前端传的是明文，这里统一转成加密串；如果已经是 ==xxx==，就不二次加密
+		if !(strings.HasPrefix(pwd, "==") && strings.HasSuffix(pwd, "==")) {
+			m["password"] = utils.EncryptPayload(pwd)
+		}
+	}
+
+	// 兜底补齐关键字段，避免前端漏传导致登录失败
+	if _, ok := m["isApp"]; !ok {
+		m["isApp"] = true
+	}
+	if v, ok := m["deviceType"].(string); !ok || strings.TrimSpace(v) == "" {
+		m["deviceType"] = "WXAPP"
+	}
+
+	out, err := json.Marshal(m)
+	if err != nil {
+		return body
+	}
+	return out
 }
 
 func (s *Server) newAnonymousUpstreamClient(jar *cookiejar.Jar, userAgent string) (*resty.Client, *url.URL, error) {
@@ -857,6 +892,11 @@ func extractLoginRequestFields(body []byte) (mobile string, userAgent string, de
 	}
 	if v, ok := m["mobile"].(string); ok {
 		mobile = v
+	}
+	if strings.TrimSpace(mobile) == "" {
+		if v, ok := m["identify"].(string); ok {
+			mobile = v
+		}
 	}
 	if v, ok := m["userAgent"].(string); ok {
 		userAgent = v

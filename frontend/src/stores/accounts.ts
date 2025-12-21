@@ -1,6 +1,6 @@
 import { defineStore } from 'pinia'
 import type { Account } from '@/types/core'
-import { apiLoginBySmsCode } from '@/services/api'
+import { apiLoginByPassword, apiLoginBySmsCode } from '@/services/api'
 import { beDeleteAccount, beListAccounts, beUpsertAccount, type BackendAccount } from '@/services/backend'
 
 function normalizeAccount(raw: BackendAccount): Account {
@@ -112,6 +112,53 @@ export const useAccountsStore = defineStore('accounts', {
         await apiLoginBySmsCode({
           mobile,
           smsCode,
+          deviceType: 'WXAPP',
+          userAgent,
+          deviceId,
+          uuid,
+        })
+        await this.refresh()
+      } catch (e) {
+        const idx2 = this.accounts.findIndex((a) => a.id === saved.id)
+        if (idx2 >= 0) this.accounts[idx2] = { ...this.accounts[idx2]!, status: 'error' }
+        throw e
+      }
+    },
+    async loginByPassword(payload: {
+      mobile: string
+      password: string
+      proxy?: string
+      userAgent?: string
+      deviceId?: string
+      uuid?: string
+    }) {
+      const mobile = payload.mobile.trim()
+      const password = payload.password
+      if (!mobile) throw new Error('请输入手机号')
+      if (!password) throw new Error('请输入密码')
+
+      const existing = this.accounts.find((a) => a.mobile === mobile) ?? null
+      const userAgent = payload.userAgent?.trim() || existing?.userAgent || undefined
+      const deviceId = payload.deviceId?.trim() || existing?.deviceId || randomHex(16)
+      const uuid = payload.uuid?.trim() || existing?.uuid || `${Date.now()}_${randomHex(10)}`
+
+      const saved = await this.upsert({
+        id: existing?.id,
+        username: existing?.username,
+        mobile,
+        proxy: payload.proxy?.trim() || existing?.proxy,
+        userAgent,
+        deviceId,
+        uuid,
+      })
+
+      const idx = this.accounts.findIndex((a) => a.id === saved.id)
+      if (idx >= 0) this.accounts[idx] = { ...this.accounts[idx]!, status: 'logging_in' }
+
+      try {
+        await apiLoginByPassword({
+          identify: mobile,
+          password,
           deviceType: 'WXAPP',
           userAgent,
           deviceId,

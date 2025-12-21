@@ -78,6 +78,42 @@ export async function apiLoginBySmsCode(params: LoginBySmsCodeParams): Promise<L
   }
 }
 
+export interface LoginByPasswordParams {
+  identify: string
+  password: string
+  isApp?: boolean
+  deviceId?: string
+  deviceType?: string
+  userAgent?: string
+  uuid?: string
+  deviceSource?: string
+}
+
+export type LoginByPasswordResponse = Record<string, unknown>
+
+export async function apiLoginByPassword(params: LoginByPasswordParams): Promise<LoginByPasswordResponse> {
+  const payload = {
+    identify: params.identify,
+    password: params.password,
+    isApp: params.isApp ?? true,
+    deviceId: params.deviceId ?? defaultDeviceId(),
+    deviceType: params.deviceType ?? 'WXAPP',
+    userAgent: params.userAgent ?? defaultMobileUserAgent(),
+    uuid: params.uuid ?? defaultUuid(),
+    deviceSource: params.deviceSource ?? defaultDeviceSource(),
+  }
+
+  try {
+    const resp = await http.post<LoginByPasswordResponse>('/api/user/web/login/identify', payload)
+    const data = resp.data as any
+    if (data?.error) throw new Error(String(data.error))
+    if (data?.success === false) throw new Error(String(data?.message ?? '登录失败'))
+    return resp.data
+  } catch (e) {
+    throw new Error(extractApiErrorMessage(e, '登录失败'))
+  }
+}
+
 function extractApiErrorMessage(error: unknown, fallback: string): string {
   if (axios.isAxiosError(error)) {
     const data = error.response?.data as any
@@ -130,10 +166,14 @@ function defaultUserAgent(): string {
   return navigator.userAgent
 }
 
+function defaultMobileUserAgent(): string {
+  // 统一用一个“像手机”的 UA，避免在桌面浏览器上登录时被识别为 PC
+  return 'Mozilla/5.0 (Linux; Android 13; Pixel 7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Mobile Safari/537.36'
+}
+
 function defaultDeviceSource(): string {
   if (typeof window === 'undefined') return 'unknown'
   const w = window.screen?.width ?? window.innerWidth
   const h = window.screen?.height ?? window.innerHeight
   return `${w}*${h} devices`
 }
-
