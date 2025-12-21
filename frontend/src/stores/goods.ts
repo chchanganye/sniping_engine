@@ -116,39 +116,12 @@ export const useGoodsStore = defineStore('goods', {
     skuGroups: [] as StoreSkuCategoryGroup[],
     selectedGroupId: undefined as number | undefined,
     goods: [] as GoodsItem[],
-    selectedGoodsId: undefined as string | undefined,
-    targetGoods: [] as GoodsItem[],
   }),
   getters: {
-    selectedGoods: (state) => state.goods.find((g) => g.id === state.selectedGoodsId),
-    targetGoodsCount: (state) => state.targetGoods.length,
-    isInTargetList: (state) => (id: string) => state.targetGoods.some((g) => g.id === id),
     selectedAddress: (state) => state.addresses.find((a) => a.id === state.selectedAddressId),
     locationReady: (state) => typeof state.longitude === 'number' && typeof state.latitude === 'number',
   },
   actions: {
-    setSelectedGoods(id: string) {
-      this.selectedGoodsId = id
-    },
-    addTargetGoods(goods: GoodsItem) {
-      if (!goods?.id) return
-      const exists = this.targetGoods.some((g) => g.id === goods.id)
-      if (exists) {
-        this.targetGoods = this.targetGoods.map((g) => (g.id === goods.id ? goods : g))
-      } else {
-        this.targetGoods.unshift(goods)
-      }
-      this.selectedGoodsId = goods.id
-    },
-    removeTargetGoods(id: string) {
-      const next = this.targetGoods.filter((g) => g.id !== id)
-      this.targetGoods = next
-      if (this.selectedGoodsId === id) this.selectedGoodsId = next[0]?.id
-    },
-    clearTargetGoods() {
-      this.targetGoods = []
-      this.selectedGoodsId = undefined
-    },
     setSelectedGroupId(id: number | undefined) {
       this.selectedGroupId = typeof id === 'number' ? id : undefined
     },

@@ -262,10 +262,39 @@ func (e *Engine) runTarget(ctx context.Context, target model.Target) {
 }
 
 func (e *Engine) attemptOnce(ctx context.Context, target model.Target) {
-	acc := e.pickAccount()
-	if acc.ID == "" {
+	var acc model.Account
+	e.mu.Lock()
+	nAccounts := len(e.accounts)
+	e.mu.Unlock()
+	if nAccounts == 0 {
 		return
 	}
+
+	// 轮询账号：A -> B -> C -> A；如果账号正在被占用则跳过，避免卡在单个账号上
+	for i := 0; i < nAccounts; i++ {
+		candidate := e.pickAccount()
+		if candidate.ID == "" {
+			return
+		}
+		if !e.tryAcquireAccount(candidate.ID) {
+			continue
+		}
+		acc = candidate
+		break
+	}
+	if acc.ID == "" {
+		// 所有账号都在忙：退化为阻塞等待下一个账号
+		candidate := e.pickAccount()
+		if candidate.ID == "" {
+			return
+		}
+		if !e.acquireAccount(ctx, candidate.ID) {
+			return
+		}
+		acc = candidate
+	}
+	defer e.releaseAccount(acc.ID)
+
 	// Refresh latest account snapshot to keep cookies/token/proxy/UA consistent with browsing sessions.
 	if e.store != nil {
 		if latest, err := e.store.GetAccount(ctx, acc.ID); err == nil {
@@ -288,11 +317,6 @@ func (e *Engine) attemptOnce(ctx context.Context, target model.Target) {
 	st.LastAttemptMs = time.Now().UnixMilli()
 	e.publishStateLocked(*st)
 	e.mu.Unlock()
-
-	if !e.acquireAccount(ctx, acc.ID) {
-		return
-	}
-	defer e.releaseAccount(acc.ID)
 
 	if !e.acquireInFlight(ctx) {
 		return
@@ -765,6 +789,21 @@ func (e *Engine) acquireAccount(ctx context.Context, accountID string) bool {
 	case lock <- struct{}{}:
 		return true
 	case <-ctx.Done():
+		return false
+	}
+}
+
+func (e *Engine) tryAcquireAccount(accountID string) bool {
+	e.mu.Lock()
+	lock := e.accountLocks[accountID]
+	e.mu.Unlock()
+	if lock == nil {
+		return true
+	}
+	select {
+	case lock <- struct{}{}:
+		return true
+	default:
 		return false
 	}
 }

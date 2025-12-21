@@ -15,7 +15,6 @@ import {
   type EnginePreflightResult,
   type EngineTestBuyResult,
 } from '@/services/backend'
-import { useGoodsStore } from '@/stores/goods'
 
 function normalizeMode(value: unknown): TaskMode {
   return value === 'scan' ? 'scan' : 'rush'
@@ -114,16 +113,6 @@ export const useTasksStore = defineStore('tasks', {
     },
     async ensureLoaded() {
       if (this.loaded) return
-      await this.refresh()
-    },
-    async importFromGoodsSelection() {
-      const goodsStore = useGoodsStore()
-      await this.ensureLoaded()
-
-      for (const goods of goodsStore.targetGoods) {
-        await this.upsertFromGoods(goods)
-      }
-
       await this.refresh()
     },
     async upsertFromGoods(goods: GoodsItem) {

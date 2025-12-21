@@ -4,30 +4,21 @@ import { ElMessage, ElMessageBox } from 'element-plus'
 import { storeToRefs } from 'pinia'
 import { Delete, Lightning, Refresh } from '@element-plus/icons-vue'
 import { useAccountsStore } from '@/stores/accounts'
-import { useGoodsStore } from '@/stores/goods'
 import { useProgressStore } from '@/stores/progress'
 import { useTasksStore } from '@/stores/tasks'
 import type { TaskMode, Task } from '@/types/core'
 import { uid } from '@/utils/id'
 
 const accountsStore = useAccountsStore()
-const goodsStore = useGoodsStore()
 const tasksStore = useTasksStore()
 const progressStore = useProgressStore()
 
 const { accounts } = storeToRefs(accountsStore)
-const { targetGoods } = storeToRefs(goodsStore)
 const { tasks, engineRunning, engineLoading, loading, captchaLoading } = storeToRefs(tasksStore)
 
 onMounted(() => {
   void accountsStore.ensureLoaded()
   void refreshAll(false)
-})
-
-const goodsMap = computed(() => {
-  const map = new Map<string, any>()
-  for (const g of targetGoods.value) map.set(g.id, g)
-  return map
 })
 
 const modeOptions: Array<{ label: string; value: TaskMode }> = [
@@ -161,8 +152,8 @@ function statusMeta(row: Task) {
           <template #default="{ row }">
             <div style="display: flex; align-items: center; gap: 10px; min-width: 0">
               <el-image
-                v-if="row.imageUrl || goodsMap.get(String(row.itemId))?.imageUrl"
-                :src="row.imageUrl || goodsMap.get(String(row.itemId))?.imageUrl"
+                v-if="row.imageUrl"
+                :src="row.imageUrl"
                 fit="cover"
                 style="width: 44px; height: 44px; border-radius: 6px; flex: 0 0 auto"
               />

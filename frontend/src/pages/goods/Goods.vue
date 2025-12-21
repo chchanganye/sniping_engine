@@ -2,7 +2,7 @@
 import { computed, onMounted, ref, watch } from 'vue'
 import { ElMessage } from 'element-plus'
 import { storeToRefs } from 'pinia'
-import { Delete, Plus } from '@element-plus/icons-vue'
+import { Plus } from '@element-plus/icons-vue'
 import type { ShippingAddress, ShopCategoryNode } from '@/types/core'
 import { useAccountsStore } from '@/stores/accounts'
 import { useGoodsStore } from '@/stores/goods'
@@ -26,12 +26,9 @@ const {
   selectedGroupId,
   goods,
   goodsLoading,
-  targetGoods,
-  targetGoodsCount,
 } = storeToRefs(goodsStore)
 
 const accountId = ref<string>('')
-const targetListVisible = ref(false)
 
 const accountOptions = computed(() =>
   accounts.value
@@ -95,19 +92,8 @@ async function onTreeNodeClick(node: ShopCategoryNode) {
 
 async function addToTargetList(item: any) {
   if (!item?.id) return
-  goodsStore.addTargetGoods(item)
   await tasksStore.upsertFromGoods(item).catch(() => null)
-  ElMessage.success('已加入目标清单')
-}
-
-function removeFromTargetList(id: string) {
-  goodsStore.removeTargetGoods(id)
-  ElMessage.success('已从目标清单移除')
-}
-
-function clearTargetList() {
-  goodsStore.clearTargetGoods()
-  ElMessage.success('已清空目标清单')
+  ElMessage.success('已添加到抢购工作台')
 }
 
 function formatPrice(value?: number) {
@@ -262,9 +248,6 @@ onMounted(async () => {
             <div class="goods-toolbar">
               <el-space :size="8" wrap>
                 <el-input v-model="keyword" placeholder="搜索：名称 / ID / 分类" style="width: 260px" clearable />
-                <el-badge :value="targetGoodsCount" :hidden="targetGoodsCount === 0">
-                  <el-button @click="targetListVisible = true">目标清单</el-button>
-                </el-badge>
               </el-space>
               <div style="color: #909399">共 {{ total }} 条</div>
             </div>
@@ -308,11 +291,8 @@ onMounted(async () => {
             </el-table-column>
             <el-table-column label="操作" width="90">
               <template #default="{ row }">
-                <el-tooltip v-if="!goodsStore.isInTargetList(row.id)" content="加入目标清单" placement="top">
+                <el-tooltip content="添加到抢购工作台" placement="top">
                   <el-button circle size="small" type="primary" :icon="Plus" @click="addToTargetList(row)" />
-                </el-tooltip>
-                <el-tooltip v-else content="从目标清单移除" placement="top">
-                  <el-button circle size="small" type="danger" :icon="Delete" @click="removeFromTargetList(row.id)" />
                 </el-tooltip>
               </template>
             </el-table-column>
@@ -336,49 +316,6 @@ onMounted(async () => {
       </el-col>
     </el-row>
 
-    <el-drawer v-model="targetListVisible" :title="`目标清单（${targetGoodsCount}）`" size="460px">
-      <div style="display: flex; align-items: center; justify-content: flex-end; gap: 12px; margin-bottom: 10px">
-        <el-button size="small" type="danger" plain :disabled="targetGoodsCount === 0" @click="clearTargetList">
-          清空
-        </el-button>
-      </div>
-
-      <el-table
-        :data="targetGoods"
-        row-key="id"
-        size="small"
-        style="width: 100%"
-        empty-text="暂无目标商品"
-      >
-        <el-table-column label="商品" min-width="240">
-          <template #default="{ row }">
-            <div style="display: flex; align-items: center; gap: 10px; min-width: 0">
-              <el-image
-                v-if="row.imageUrl"
-                :src="row.imageUrl"
-                fit="cover"
-                style="width: 44px; height: 44px; border-radius: 6px; flex: 0 0 auto"
-              />
-              <div style="min-width: 0">
-                <div style="font-weight: 600; overflow: hidden; text-overflow: ellipsis; white-space: nowrap">
-                  {{ row.title }}
-                </div>
-              </div>
-            </div>
-          </template>
-        </el-table-column>
-        <el-table-column label="价格" width="110">
-          <template #default="{ row }">{{ formatPrice(row.price) }}</template>
-        </el-table-column>
-        <el-table-column label="操作" width="90">
-          <template #default="{ row }">
-            <el-tooltip content="移除" placement="top">
-              <el-button circle size="small" type="danger" :icon="Delete" @click="removeFromTargetList(row.id)" />
-            </el-tooltip>
-          </template>
-        </el-table-column>
-      </el-table>
-    </el-drawer>
   </div>
 </template>
 
