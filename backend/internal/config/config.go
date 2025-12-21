@@ -41,6 +41,12 @@ type LimitsConfig struct {
 	PerAccountQPS   float64 `yaml:"perAccountQPS"`
 	PerAccountBurst int     `yaml:"perAccountBurst"`
 	MaxInFlight     int     `yaml:"maxInFlight"`
+	// MaxPerTargetInFlight 控制同一个商品/任务在同一时间最多允许多少个账号并发尝试下单。
+	// 默认 1，保持原来的“单目标串行”行为。
+	MaxPerTargetInFlight int `yaml:"maxPerTargetInFlight"`
+	// CaptchaMaxInFlight 控制验证码求解（无头浏览器）的并发数上限。
+	// 默认 1，避免小机器 CPU/内存被打满。
+	CaptchaMaxInFlight int `yaml:"captchaMaxInFlight"`
 }
 
 type TaskConfig struct {
@@ -130,6 +136,12 @@ func (c *Config) applyDefaults() {
 	if c.Limits.MaxInFlight <= 0 {
 		c.Limits.MaxInFlight = 20
 	}
+	if c.Limits.MaxPerTargetInFlight <= 0 {
+		c.Limits.MaxPerTargetInFlight = 1
+	}
+	if c.Limits.CaptchaMaxInFlight <= 0 {
+		c.Limits.CaptchaMaxInFlight = 1
+	}
 	if c.Provider.BaseURL == "" {
 		c.Provider.BaseURL = "http://127.0.0.1:8080/mock"
 	}
@@ -153,4 +165,3 @@ func (c Config) validate() error {
 	}
 	return nil
 }
-

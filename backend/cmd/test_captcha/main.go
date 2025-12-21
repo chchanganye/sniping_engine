@@ -1,42 +1,51 @@
 package main
 
 import (
+	"flag"
 	"fmt"
+	"os"
+	"strings"
 	"time"
 
 	"sniping_engine/internal/utils"
 )
 
 func main() {
-	// 获取当前时间戳
-	timestamp := time.Now().UnixMilli()
-	fmt.Printf("测试时间戳: %d\n", timestamp)
+	var (
+		dracoToken = flag.String("draco", "", "draco_local 的值（也可用环境变量 DRACO_LOCAL / DRACO_TOKEN）")
+		timestamp  = flag.Int64("timestamp", 0, "时间戳（毫秒），默认使用当前时间")
+	)
+	flag.Parse()
 
-	// 这里需要替换为实际的draco_local cookie值
-	// 你可以从浏览器的开发者工具中获取这个值
-	dracoToken := "eyJ0eXAiOiJKV1QiLCJhbGciOiJIUzI1NiJ9.eyJzdWIiOiJsb2dpbiIsInBhdGgiOiIvIiwidG9rZW5LZXkiOiIzZGU4NTNiM2EwNmNhZWM4MTM3NGJjOTgyMWZmMTdkMTVkZTlkMzhhYjFlMDVkYWYyNWNkZTU2NjYxMWM3YjgzIiwibmJmIjoxNzY2MjE4MTA5LCJkb21haW4iOiI0MDA4MTE3MTE3LmNvbSIsImlzcyI6ImRyYWNvIiwidGVuYW50SWQiOjEsImV4cGlyZV90aW1lIjoyNTkyMDAwLCJleHAiOjE3Njg4MTAxMDksImlhdCI6MTc2NjIxODEwOX0.Fs_ApcRVaiZpAxj5c0aTqr_tFCTDItmGPhjQKsRdX80"
+	ts := *timestamp
+	if ts <= 0 {
+		ts = time.Now().UnixMilli()
+	}
 
-	if dracoToken == "your_actual_draco_local_cookie_value" {
-		fmt.Println("错误: 请先替换为实际的draco_local cookie值")
-		fmt.Println("你可以从浏览器的开发者工具中获取这个值")
+	token := strings.TrimSpace(*dracoToken)
+	if token == "" {
+		token = strings.TrimSpace(os.Getenv("DRACO_LOCAL"))
+	}
+	if token == "" {
+		token = strings.TrimSpace(os.Getenv("DRACO_TOKEN"))
+	}
+	if token == "" {
+		fmt.Println("错误：缺少 draco_local，请通过参数 -draco 传入，或设置环境变量 DRACO_LOCAL/DRACO_TOKEN")
 		return
 	}
 
-	fmt.Printf("使用dracoToken: %s\n", dracoToken)
-	fmt.Println("开始调用SolveAliyunCaptcha方法...")
+	fmt.Printf("测试时间戳：%d\n", ts)
+	fmt.Println("开始调用 SolveAliyunCaptcha...")
 
-	// 调用验证码解决方法
-	captchaResult, err := utils.SolveAliyunCaptcha(timestamp, dracoToken)
+	captchaResult, err := utils.SolveAliyunCaptcha(ts, token)
 	if err != nil {
-		fmt.Printf("调用失败: %v\n", err)
+		fmt.Printf("调用失败：%v\n", err)
 		return
 	}
-
-	if captchaResult == "" {
+	if strings.TrimSpace(captchaResult) == "" {
 		fmt.Println("调用成功，但返回结果为空")
 		return
 	}
 
-	fmt.Printf("调用成功，返回结果: %s\n", captchaResult)
-	fmt.Printf("结果长度: %d\n", len(captchaResult))
+	fmt.Printf("调用成功，结果长度：%d\n", len(captchaResult))
 }

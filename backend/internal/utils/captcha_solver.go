@@ -23,6 +23,40 @@ import (
 )
 
 // --- 配置区域 ---
+var (
+	captchaSemaphoreMu sync.RWMutex
+	captchaSemaphore   = make(chan struct{}, 1)
+)
+
+// SetCaptchaMaxConcurrent 设置验证码求解（无头浏览器）的并发数上限。
+// n <= 0 时会自动按 1 处理。
+func SetCaptchaMaxConcurrent(n int) {
+	if n <= 0 {
+		n = 1
+	}
+	captchaSemaphoreMu.Lock()
+	captchaSemaphore = make(chan struct{}, n)
+	captchaSemaphoreMu.Unlock()
+}
+
+func acquireCaptchaSlot(ctx context.Context) (func(), error) {
+	captchaSemaphoreMu.RLock()
+	sem := captchaSemaphore
+	captchaSemaphoreMu.RUnlock()
+
+	select {
+	case sem <- struct{}{}:
+		return func() {
+			select {
+			case <-sem:
+			default:
+			}
+		}, nil
+	case <-ctx.Done():
+		return nil, ctx.Err()
+	}
+}
+
 const (
 	JfbymToken  = "DAxk0GILbeSmlvuC_bf-ak99PB7rMPEflWi6JKJvwmE"
 	JfbymApiUrl = "http://api.jfbym.com/api/YmServer/customApi"
@@ -82,6 +116,18 @@ func SolveAliyunCaptcha(timestamp int64, dracoToken string) (string, error) {
 func SolveAliyunCaptchaWithContext(parent context.Context, timestamp int64, dracoToken string) (string, error) {
 	rand.Seed(time.Now().UnixNano())
 
+	// 设置总超时时间，并限制无头浏览器并发，避免多账号同时解码把机器打满
+
+	// 设置总超时时间，并限制无头浏览器并发，避免多账号同时解码把机器打满
+	ctx, cancel := context.WithTimeout(parent, 360*time.Second)
+	defer cancel()
+
+	release, err := acquireCaptchaSlot(ctx)
+	if err != nil {
+		return "", err
+	}
+	defer release()
+
 	// 构造目标 URL
 	targetUrl := fmt.Sprintf(
 		"https://m.4008117117.com/aliyun-captcha?t=%d&cookie=true&draco_local=%s",
@@ -101,9 +147,6 @@ func SolveAliyunCaptchaWithContext(parent context.Context, timestamp int64, drac
 	page.MustEmulate(devices.IPhoneX)
 
 	// 设置总超时时间
-	ctx, cancel := context.WithTimeout(parent, 360*time.Second)
-	defer cancel()
-
 	router := page.HijackRequests()
 	defer router.MustStop()
 

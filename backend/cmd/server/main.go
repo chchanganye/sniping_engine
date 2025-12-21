@@ -22,6 +22,7 @@ import (
 	"sniping_engine/internal/notify"
 	"sniping_engine/internal/provider/standard"
 	"sniping_engine/internal/store/sqlite"
+	"sniping_engine/internal/utils"
 )
 
 func main() {
@@ -43,6 +44,19 @@ func main() {
 		log.Fatalf("open sqlite: %v", err)
 	}
 	defer store.Close()
+
+	if v, ok, err := store.GetLimitsSettings(ctx); err == nil && ok {
+		if v.MaxPerTargetInFlight > 0 {
+			cfg.Limits.MaxPerTargetInFlight = v.MaxPerTargetInFlight
+		}
+		if v.CaptchaMaxInFlight > 0 {
+			cfg.Limits.CaptchaMaxInFlight = v.CaptchaMaxInFlight
+		}
+	} else if err != nil {
+		bus.Log("warn", "读取并发设置失败", map[string]any{"error": err.Error()})
+	}
+
+	utils.SetCaptchaMaxConcurrent(cfg.Limits.CaptchaMaxInFlight)
 
 	prov := standard.New(cfg.Provider, cfg.Proxy, bus)
 	emailNotifier := notify.NewEmailNotifier(store, bus)

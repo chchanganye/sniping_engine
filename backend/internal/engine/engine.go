@@ -50,6 +50,9 @@ type Engine struct {
 	perLimiter    map[string]*rate.Limiter
 	inFlight      chan struct{}
 	accountLocks  map[string]chan struct{}
+	reserved      map[string]int
+
+	maxPerTargetInFlight atomic.Int64
 
 	rr atomic.Uint64
 }
@@ -86,7 +89,12 @@ func New(opts Options) *Engine {
 		globalQPS = 5
 	}
 
-	return &Engine{
+	maxPerTarget := opts.Limits.MaxPerTargetInFlight
+	if maxPerTarget <= 0 {
+		maxPerTarget = 1
+	}
+
+	e := &Engine{
 		store:         opts.Store,
 		provider:      opts.Provider,
 		bus:           opts.Bus,
@@ -97,8 +105,12 @@ func New(opts Options) *Engine {
 		perLimiter:    make(map[string]*rate.Limiter),
 		inFlight:      make(chan struct{}, maxInFlight),
 		accountLocks:  make(map[string]chan struct{}),
+		reserved:      make(map[string]int),
 		globalLimiter: rate.NewLimiter(rate.Limit(globalQPS), globalBurst),
 	}
+	e.maxPerTargetInFlight.Store(int64(maxPerTarget))
+	return e
+
 }
 
 func (e *Engine) StartAll(ctx context.Context) error {
@@ -247,7 +259,7 @@ func (e *Engine) runTarget(ctx context.Context, target model.Target) {
 		interval = e.task.RushInterval()
 	}
 
-	e.attemptOnce(ctx, target)
+	e.launchAttempts(ctx, target)
 	ticker := time.NewTicker(interval)
 	defer ticker.Stop()
 
@@ -256,7 +268,7 @@ func (e *Engine) runTarget(ctx context.Context, target model.Target) {
 		case <-ctx.Done():
 			return
 		case <-ticker.C:
-			e.attemptOnce(ctx, target)
+			e.launchAttempts(ctx, target)
 		}
 	}
 }
@@ -295,7 +307,7 @@ func (e *Engine) attemptOnce(ctx context.Context, target model.Target) {
 	}
 	defer e.releaseAccount(acc.ID)
 
-	// Refresh latest account snapshot to keep cookies/token/proxy/UA consistent with browsing sessions.
+	// 刷新账号快照，尽量保持 cookie/token/proxy/UA 与最近登录态一致
 	if e.store != nil {
 		if latest, err := e.store.GetAccount(ctx, acc.ID); err == nil {
 			acc = latest
@@ -403,6 +415,244 @@ func (e *Engine) attemptOnce(ctx context.Context, target model.Target) {
 			})
 		}
 	}
+}
+
+func (e *Engine) launchAttempts(ctx context.Context, target model.Target) {
+	max := int(e.maxPerTargetInFlight.Load())
+	if max <= 0 {
+		max = 1
+	}
+
+	e.mu.Lock()
+	nAccounts := len(e.accounts)
+	e.mu.Unlock()
+	if nAccounts == 0 {
+		return
+	}
+	if max > nAccounts {
+		max = nAccounts
+	}
+
+	for i := 0; i < max; i++ {
+		select {
+		case <-ctx.Done():
+			return
+		default:
+		}
+
+		acc, ok := e.tryPickAndLockAccount(nAccounts)
+		if !ok {
+			return
+		}
+
+		if !e.tryAcquireInFlight() {
+			e.releaseAccount(acc.ID)
+			return
+		}
+
+		reserveQty, reserved := e.tryReserveTarget(target)
+		if !reserved {
+			e.releaseInFlight()
+			e.releaseAccount(acc.ID)
+			return
+		}
+
+		e.wg.Add(1)
+		go func(a model.Account, qty int) {
+			defer e.wg.Done()
+			defer e.releaseInFlight()
+			defer e.releaseAccount(a.ID)
+			success := e.attemptWithAccount(ctx, target, a)
+			e.finishReservedTarget(target, qty, success)
+		}(acc, reserveQty)
+	}
+}
+
+// SetMaxPerTargetInFlight 设置同一商品/任务允许的并发抢购账号数。
+// n <= 0 时会自动按 1 处理。
+func (e *Engine) SetMaxPerTargetInFlight(n int) {
+	if n <= 0 {
+		n = 1
+	}
+	e.maxPerTargetInFlight.Store(int64(n))
+}
+
+func (e *Engine) tryAcquireInFlight() bool {
+	select {
+	case e.inFlight <- struct{}{}:
+		return true
+	default:
+		return false
+	}
+}
+
+func (e *Engine) tryPickAndLockAccount(nAccounts int) (model.Account, bool) {
+	for i := 0; i < nAccounts; i++ {
+		candidate := e.pickAccount()
+		if candidate.ID == "" {
+			return model.Account{}, false
+		}
+		if !e.tryAcquireAccount(candidate.ID) {
+			continue
+		}
+		return candidate, true
+	}
+	return model.Account{}, false
+}
+
+func (e *Engine) normalizePerOrderQty(qty int) int {
+	if qty <= 0 {
+		return 1
+	}
+	return qty
+}
+
+func (e *Engine) tryReserveTarget(target model.Target) (int, bool) {
+	qty := e.normalizePerOrderQty(target.PerOrderQty)
+	e.mu.Lock()
+	defer e.mu.Unlock()
+
+	st := e.states[target.ID]
+	if st == nil {
+		st = &model.TaskState{TargetID: target.ID, Running: true, TargetQty: target.TargetQty}
+		e.states[target.ID] = st
+	}
+	if st.TargetQty > 0 {
+		remaining := st.TargetQty - (st.PurchasedQty + e.reserved[target.ID])
+		if remaining < qty {
+			return 0, false
+		}
+	}
+	e.reserved[target.ID] += qty
+	return qty, true
+}
+
+func (e *Engine) finishReservedTarget(target model.Target, qty int, success bool) {
+	qty = e.normalizePerOrderQty(qty)
+	nowMs := time.Now().UnixMilli()
+
+	e.mu.Lock()
+	defer e.mu.Unlock()
+
+	if qty > 0 {
+		e.reserved[target.ID] -= qty
+		if e.reserved[target.ID] < 0 {
+			e.reserved[target.ID] = 0
+		}
+	}
+
+	if !success {
+		return
+	}
+
+	st := e.states[target.ID]
+	if st == nil {
+		return
+	}
+	st.PurchasedQty += qty
+	st.LastSuccessMs = nowMs
+	st.LastError = ""
+	if st.TargetQty > 0 && st.PurchasedQty >= st.TargetQty {
+		st.Running = false
+	}
+	e.publishStateLocked(*st)
+}
+
+func (e *Engine) attemptWithAccount(ctx context.Context, target model.Target, acc model.Account) bool {
+	// 刷新账号快照，尽量保持 cookie/token/proxy/UA 与最近登录态一致
+	if e.store != nil {
+		if latest, err := e.store.GetAccount(ctx, acc.ID); err == nil {
+			acc = latest
+		}
+	}
+
+	e.mu.Lock()
+	st := e.states[target.ID]
+	if st == nil {
+		st = &model.TaskState{TargetID: target.ID, Running: true, TargetQty: target.TargetQty}
+		e.states[target.ID] = st
+	}
+	if st.TargetQty > 0 && st.PurchasedQty >= st.TargetQty {
+		st.Running = false
+		e.publishStateLocked(*st)
+		e.mu.Unlock()
+		return false
+	}
+	st.LastAttemptMs = time.Now().UnixMilli()
+	e.publishStateLocked(*st)
+	e.mu.Unlock()
+
+	if strings.TrimSpace(acc.Token) == "" {
+		return false
+	}
+
+	if !e.waitLimits(ctx, acc.ID) {
+		return false
+	}
+
+	pre, updatedAcc, err := e.provider.Preflight(ctx, acc, target)
+	if err != nil {
+		e.setError(target.ID, err)
+		return false
+	}
+	_ = e.persistAccount(ctx, updatedAcc)
+	acc = updatedAcc
+
+	e.mu.Lock()
+	if st := e.states[target.ID]; st != nil {
+		v := pre.NeedCaptcha
+		st.NeedCaptcha = &v
+		e.publishStateLocked(*st)
+	}
+	e.mu.Unlock()
+
+	if !pre.CanBuy {
+		if e.bus != nil {
+			e.bus.Log("debug", "当前不可购买", map[string]any{
+				"targetId":  target.ID,
+				"accountId": acc.ID,
+				"traceId":   pre.TraceID,
+			})
+		}
+		return false
+	}
+
+	if !e.waitLimits(ctx, acc.ID) {
+		return false
+	}
+
+	res, updatedAcc2, err := e.provider.CreateOrder(ctx, acc, target, pre)
+	if err != nil {
+		e.setError(target.ID, err)
+		return false
+	}
+	_ = e.persistAccount(ctx, updatedAcc2)
+
+	if e.bus != nil {
+		e.bus.Log("info", "下单成功", map[string]any{
+			"targetId":  target.ID,
+			"accountId": acc.ID,
+			"orderId":   res.OrderID,
+			"traceId":   res.TraceID,
+		})
+	}
+	if e.notifier != nil {
+		e.notifier.NotifyOrderCreated(ctx, notify.OrderCreatedEvent{
+			At:         time.Now().UnixMilli(),
+			AccountID:  acc.ID,
+			Mobile:     acc.Mobile,
+			TargetID:   target.ID,
+			TargetName: target.Name,
+			Mode:       string(target.Mode),
+			ItemID:     target.ItemID,
+			SKUID:      target.SKUID,
+			ShopID:     target.ShopID,
+			Quantity:   e.normalizePerOrderQty(target.PerOrderQty),
+			OrderID:    res.OrderID,
+			TraceID:    res.TraceID,
+		})
+	}
+	return true
 }
 
 func (e *Engine) TestBuyOnce(ctx context.Context, targetID string, captchaVerifyParam string, opID string) (TestBuyResult, error) {

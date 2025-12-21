@@ -21,6 +21,7 @@ import (
 	"sniping_engine/internal/model"
 	"sniping_engine/internal/notify"
 	"sniping_engine/internal/store/sqlite"
+	"sniping_engine/internal/utils"
 	"sniping_engine/internal/ws"
 )
 
@@ -69,6 +70,7 @@ func (s *Server) Handler() http.Handler {
 	api.HandleFunc("/api/v1/engine/test-buy", s.handleEngineTestBuy)
 	api.HandleFunc("/api/v1/settings/email", s.handleEmailSettings)
 	api.HandleFunc("/api/v1/settings/email/test", s.handleEmailTest)
+	api.HandleFunc("/api/v1/settings/limits", s.handleLimitsSettings)
 	api.HandleFunc("/api/", s.handleUpstreamProxy)
 
 	mux.Handle("/api/", corsMiddleware(s.cfg.Server.Cors, api))
@@ -435,6 +437,94 @@ func (s *Server) handleEmailSettings(w http.ResponseWriter, r *http.Request) {
 type emailTestPayload struct {
 	Email    string `json:"email,omitempty"`
 	AuthCode string `json:"authCode,omitempty"`
+}
+
+type limitsSettingsPayload struct {
+	MaxPerTargetInFlight *int `json:"maxPerTargetInFlight,omitempty"`
+	CaptchaMaxInFlight   *int `json:"captchaMaxInFlight,omitempty"`
+}
+
+func (s *Server) handleLimitsSettings(w http.ResponseWriter, r *http.Request) {
+	switch r.Method {
+	case http.MethodGet:
+		val, ok, err := s.store.GetLimitsSettings(r.Context())
+		if err != nil {
+			writeJSON(w, http.StatusInternalServerError, map[string]any{"error": err.Error()})
+			return
+		}
+		if !ok {
+			maxPerTarget := s.cfg.Limits.MaxPerTargetInFlight
+			if maxPerTarget <= 0 {
+				maxPerTarget = 1
+			}
+			captchaMax := s.cfg.Limits.CaptchaMaxInFlight
+			if captchaMax <= 0 {
+				captchaMax = 1
+			}
+			writeJSON(w, http.StatusOK, map[string]any{
+				"data": model.LimitsSettings{
+					MaxPerTargetInFlight: maxPerTarget,
+					CaptchaMaxInFlight:   captchaMax,
+				},
+			})
+			return
+		}
+		writeJSON(w, http.StatusOK, map[string]any{"data": val})
+	case http.MethodPost:
+		var body limitsSettingsPayload
+		if err := readJSON(r, &body); err != nil {
+			writeJSON(w, http.StatusBadRequest, map[string]any{"error": err.Error()})
+			return
+		}
+
+		current, ok, err := s.store.GetLimitsSettings(r.Context())
+		if err != nil {
+			writeJSON(w, http.StatusInternalServerError, map[string]any{"error": err.Error()})
+			return
+		}
+		if !ok {
+			current.MaxPerTargetInFlight = s.cfg.Limits.MaxPerTargetInFlight
+			current.CaptchaMaxInFlight = s.cfg.Limits.CaptchaMaxInFlight
+		}
+
+		next := current
+		if body.MaxPerTargetInFlight != nil {
+			next.MaxPerTargetInFlight = *body.MaxPerTargetInFlight
+		}
+		if body.CaptchaMaxInFlight != nil {
+			next.CaptchaMaxInFlight = *body.CaptchaMaxInFlight
+		}
+
+		if next.MaxPerTargetInFlight <= 0 {
+			next.MaxPerTargetInFlight = 1
+		}
+		if next.CaptchaMaxInFlight <= 0 {
+			next.CaptchaMaxInFlight = 1
+		}
+		if next.MaxPerTargetInFlight > 200 {
+			writeJSON(w, http.StatusBadRequest, map[string]any{"error": "maxPerTargetInFlight is too large"})
+			return
+		}
+		if next.CaptchaMaxInFlight > 50 {
+			writeJSON(w, http.StatusBadRequest, map[string]any{"error": "captchaMaxInFlight is too large"})
+			return
+		}
+
+		saved, err := s.store.UpsertLimitsSettings(r.Context(), next)
+		if err != nil {
+			writeJSON(w, http.StatusInternalServerError, map[string]any{"error": err.Error()})
+			return
+		}
+
+		if s.engine != nil {
+			s.engine.SetMaxPerTargetInFlight(saved.MaxPerTargetInFlight)
+		}
+		utils.SetCaptchaMaxConcurrent(saved.CaptchaMaxInFlight)
+
+		writeJSON(w, http.StatusOK, map[string]any{"data": saved})
+	default:
+		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+	}
 }
 
 func (s *Server) handleEmailTest(w http.ResponseWriter, r *http.Request) {

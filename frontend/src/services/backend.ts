@@ -73,6 +73,11 @@ export interface EmailSettings {
   authCode?: string
 }
 
+export interface LimitsSettings {
+  maxPerTargetInFlight: number
+  captchaMaxInFlight: number
+}
+
 type DataEnvelope<T> = { data: T }
 
 export async function beListAccounts(): Promise<BackendAccount[]> {
@@ -154,6 +159,16 @@ export async function beTestEmail(payload?: Partial<EmailSettings>): Promise<voi
   } catch (e) {
     throw new Error(extractBackendErrorMessage(e, '发送测试邮件失败'))
   }
+}
+
+export async function beGetLimitsSettings(): Promise<LimitsSettings> {
+  const resp = await http.get<DataEnvelope<LimitsSettings>>('/api/v1/settings/limits')
+  return resp.data.data
+}
+
+export async function beSaveLimitsSettings(payload: Partial<LimitsSettings>): Promise<LimitsSettings> {
+  const resp = await http.post<DataEnvelope<LimitsSettings>>('/api/v1/settings/limits', payload)
+  return resp.data.data
 }
 
 function extractBackendErrorMessage(error: unknown, fallback: string): string {

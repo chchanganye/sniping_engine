@@ -18,6 +18,10 @@ limits:
   perAccountQPS: 1
   perAccountBurst: 2
   maxInFlight: 20
+  # 同一商品/任务允许的并发抢购账号数（提高速度时可调大）
+  maxPerTargetInFlight: 1
+  # 验证码求解（无头浏览器）并发数上限（机器配置不高建议保持 1）
+  captchaMaxInFlight: 1
 
 task:
   rushIntervalMs: 120

@@ -12,6 +12,7 @@ import (
 )
 
 const emailSettingsKey = "email_settings"
+const limitsSettingsKey = "limits_settings"
 
 func (s *Store) GetEmailSettings(ctx context.Context) (model.EmailSettings, bool, error) {
 	var row struct {
@@ -63,6 +64,46 @@ func (s *Store) UpsertEmailSettings(ctx context.Context, v model.EmailSettings) 
 	`, emailSettingsKey, string(b), now)
 	if err != nil {
 		return model.EmailSettings{}, err
+	}
+	return v, nil
+}
+
+func (s *Store) GetLimitsSettings(ctx context.Context) (model.LimitsSettings, bool, error) {
+	var row struct {
+		valueJSON string
+		updatedAt int64
+	}
+	err := s.db.QueryRowContext(ctx, `
+		SELECT value_json, updated_at FROM settings WHERE key = ?
+	`, limitsSettingsKey).Scan(&row.valueJSON, &row.updatedAt)
+	if err != nil {
+		if errors.Is(err, sql.ErrNoRows) {
+			return model.LimitsSettings{}, false, nil
+		}
+		return model.LimitsSettings{}, false, err
+	}
+	var out model.LimitsSettings
+	if err := json.Unmarshal([]byte(row.valueJSON), &out); err != nil {
+		return model.LimitsSettings{}, false, err
+	}
+	return out, true, nil
+}
+
+func (s *Store) UpsertLimitsSettings(ctx context.Context, v model.LimitsSettings) (model.LimitsSettings, error) {
+	now := time.Now().UnixMilli()
+	b, err := json.Marshal(v)
+	if err != nil {
+		return model.LimitsSettings{}, err
+	}
+	_, err = s.db.ExecContext(ctx, `
+		INSERT INTO settings (key, value_json, updated_at)
+		VALUES (?, ?, ?)
+		ON CONFLICT(key) DO UPDATE SET
+			value_json = excluded.value_json,
+			updated_at = excluded.updated_at
+	`, limitsSettingsKey, string(b), now)
+	if err != nil {
+		return model.LimitsSettings{}, err
 	}
 	return v, nil
 }

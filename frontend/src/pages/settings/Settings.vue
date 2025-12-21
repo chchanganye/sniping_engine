@@ -2,17 +2,33 @@
 import { onMounted, reactive, ref } from 'vue'
 import type { FormInstance, FormRules } from 'element-plus'
 import { ElMessage } from 'element-plus'
-import { beGetEmailSettings, beSaveEmailSettings, beTestEmail, type EmailSettings } from '@/services/backend'
+import {
+  beGetEmailSettings,
+  beGetLimitsSettings,
+  beSaveEmailSettings,
+  beSaveLimitsSettings,
+  beTestEmail,
+  type EmailSettings,
+  type LimitsSettings,
+} from '@/services/backend'
 
 const loading = ref(false)
 const saving = ref(false)
 const testing = ref(false)
 const formRef = ref<FormInstance>()
 
+const limitsLoading = ref(false)
+const limitsSaving = ref(false)
+
 const form = reactive<EmailSettings>({
   enabled: false,
   email: '',
   authCode: '',
+})
+
+const limits = reactive<LimitsSettings>({
+  maxPerTargetInFlight: 1,
+  captchaMaxInFlight: 1,
 })
 
 function isValidEmailLike(value: string): boolean {
@@ -66,6 +82,19 @@ async function load() {
   }
 }
 
+async function loadLimits() {
+  limitsLoading.value = true
+  try {
+    const data = await beGetLimitsSettings()
+    limits.maxPerTargetInFlight = Number(data.maxPerTargetInFlight || 1)
+    limits.captchaMaxInFlight = Number(data.captchaMaxInFlight || 1)
+  } catch (e) {
+    ElMessage.error(e instanceof Error ? e.message : '加载失败')
+  } finally {
+    limitsLoading.value = false
+  }
+}
+
 async function save(silent = false): Promise<boolean> {
   const ok = await formRef.value?.validate().catch(() => false)
   if (!ok) return false
@@ -106,8 +135,27 @@ async function testEmail() {
   }
 }
 
+async function saveLimits() {
+  limitsSaving.value = true
+  try {
+    const payload: Partial<LimitsSettings> = {
+      maxPerTargetInFlight: Math.max(1, Math.floor(Number(limits.maxPerTargetInFlight || 1))),
+      captchaMaxInFlight: Math.max(1, Math.floor(Number(limits.captchaMaxInFlight || 1))),
+    }
+    const saved = await beSaveLimitsSettings(payload)
+    limits.maxPerTargetInFlight = Number(saved.maxPerTargetInFlight || 1)
+    limits.captchaMaxInFlight = Number(saved.captchaMaxInFlight || 1)
+    ElMessage.success('已保存')
+  } catch (e) {
+    ElMessage.error(e instanceof Error ? e.message : '保存失败')
+  } finally {
+    limitsSaving.value = false
+  }
+}
+
 onMounted(() => {
   void load()
+  void loadLimits()
 })
 </script>
 
@@ -144,6 +192,26 @@ onMounted(() => {
             <el-button type="primary" :loading="saving" @click="save">保存</el-button>
             <el-button :loading="testing" @click="testEmail">发送测试邮件</el-button>
           </el-space>
+        </el-form-item>
+      </el-form>
+    </el-card>
+
+    <el-card shadow="never" header="并发设置" style="margin-top: 12px">
+      <el-form v-loading="limitsLoading" :model="limits" label-width="160px" style="max-width: 720px">
+        <el-form-item label="同一任务并发账号数">
+          <el-input-number v-model="limits.maxPerTargetInFlight" :min="1" :max="200" :step="1" />
+          <div style="margin-left: 10px; color: #909399">
+            数值越大越快，但更容易触发风控/占用更多资源
+          </div>
+        </el-form-item>
+
+        <el-form-item label="验证码并发（无头浏览器）">
+          <el-input-number v-model="limits.captchaMaxInFlight" :min="1" :max="50" :step="1" />
+          <div style="margin-left: 10px; color: #909399">机器配置不高建议保持 1</div>
+        </el-form-item>
+
+        <el-form-item>
+          <el-button type="primary" :loading="limitsSaving" @click="saveLimits">保存</el-button>
         </el-form-item>
       </el-form>
     </el-card>
