@@ -2,7 +2,7 @@ server:
   addr: ":8090"
   cors:
     allowOrigins:
-      - "*"
+      - "https://123.56.106.229:8080"
     allowCredentials: true
 
 storage:
