@@ -109,6 +109,7 @@ export interface GoodsItem {
   id: string
   title: string
   price?: number
+  priceUnit?: 'money' | 'points'
   stock?: number
   imageUrl?: string
   categoryId?: string

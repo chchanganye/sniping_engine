@@ -100,3 +100,46 @@ export async function apiSearchStoreSkuByCategory(
   }
 }
 
+export async function apiListShopCategoryByParent(
+  token: string,
+  params: { frontCategoryId: number; storeId: number; type: string },
+): Promise<ShopCategoryNode[]> {
+  try {
+    const resp = await http.get<ApiEnvelope<ShopCategoryNode[]>>('/api/item/shop-category/list', {
+      params: {
+        frontCategoryId: params.frontCategoryId,
+        storeId: params.storeId,
+        type: params.type,
+      },
+      headers: tokenHeaders(token),
+    })
+    if ((resp.data as any)?.error) throw new Error(String((resp.data as any).error))
+    if (!resp.data?.success) throw new Error(resp.data?.message || '获取积分分类失败')
+    return Array.isArray(resp.data.data) ? resp.data.data : []
+  } catch (e) {
+    throw new Error(extractApiErrorMessage(e, '获取积分分类失败'))
+  }
+}
+
+export async function apiSearchPointsSkuByCategory(
+  token: string,
+  params: { frontCategoryId: number; pageNo: number; pageSize: number; storeIds: number | string; promotionRender?: boolean },
+): Promise<StoreSkuCategoryGroup[]> {
+  try {
+    const resp = await http.get<ApiEnvelope<StoreSkuCategoryGroup[]>>('/api/item/store/item/searchPointsSkuByCategory', {
+      params: {
+        frontCategoryId: params.frontCategoryId,
+        pageNo: params.pageNo,
+        pageSize: params.pageSize,
+        storeIds: params.storeIds,
+        promotionRender: params.promotionRender ?? false,
+      },
+      headers: tokenHeaders(token),
+    })
+    if ((resp.data as any)?.error) throw new Error(String((resp.data as any).error))
+    if (!resp.data?.success) throw new Error(resp.data?.message || '获取积分商品失败')
+    return Array.isArray(resp.data.data) ? resp.data.data : []
+  } catch (e) {
+    throw new Error(extractApiErrorMessage(e, '获取积分商品失败'))
+  }
+}

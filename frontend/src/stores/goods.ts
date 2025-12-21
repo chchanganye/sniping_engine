@@ -1,8 +1,17 @@
 import { defineStore } from 'pinia'
 import type { GoodsItem, ShippingAddress, ShopCategoryNode, StoreSkuCategoryGroup, StoreSkuModel } from '@/types/core'
-import { apiFetchShopCategoryTree, apiListShippingAddresses, apiSearchStoreSkuByCategory } from '@/services/target'
+import {
+  apiFetchShopCategoryTree,
+  apiListShippingAddresses,
+  apiListShopCategoryByParent,
+  apiSearchPointsSkuByCategory,
+  apiSearchStoreSkuByCategory,
+} from '@/services/target'
 
 const ROOT_FRONT_CATEGORY_ID = 4403
+const POINTS_ROOT_FRONT_CATEGORY_ID = 3567
+const POINTS_DEFAULT_STORE_ID = 1100182001
+const POINTS_DEFAULT_TYPE = '7_8_9_10'
 
 function normalizeText(value: unknown): string {
   if (value == null) return ''
@@ -90,6 +99,13 @@ function skuToGoodsItem(sku: StoreSkuModel, group?: StoreSkuCategoryGroup): Good
   }
 }
 
+function skuToPointsGoodsItem(sku: StoreSkuModel, group?: StoreSkuCategoryGroup): GoodsItem {
+  return {
+    ...skuToGoodsItem(sku, group),
+    priceUnit: 'points',
+  }
+}
+
 function treeHasCategoryId(nodes: ShopCategoryNode[], id: number): boolean {
   for (const node of nodes) {
     if (node.id === id) return true
@@ -102,6 +118,7 @@ function treeHasCategoryId(nodes: ShopCategoryNode[], id: number): boolean {
 
 export const useGoodsStore = defineStore('goods', {
   state: () => ({
+    mode: 'normal' as 'normal' | 'points',
     addressesLoading: false,
     addresses: [] as ShippingAddress[],
     selectedAddressId: undefined as number | undefined,
@@ -116,12 +133,34 @@ export const useGoodsStore = defineStore('goods', {
     skuGroups: [] as StoreSkuCategoryGroup[],
     selectedGroupId: undefined as number | undefined,
     goods: [] as GoodsItem[],
+
+    pointsStoreId: POINTS_DEFAULT_STORE_ID,
+    pointsRootCategoryId: POINTS_ROOT_FRONT_CATEGORY_ID,
+    pointsType: POINTS_DEFAULT_TYPE,
   }),
   getters: {
     selectedAddress: (state) => state.addresses.find((a) => a.id === state.selectedAddressId),
     locationReady: (state) => typeof state.longitude === 'number' && typeof state.latitude === 'number',
   },
   actions: {
+    setMode(mode: 'normal' | 'points') {
+      this.mode = mode === 'points' ? 'points' : 'normal'
+      this.categories = []
+      this.selectedCategoryId = undefined
+      this.skuGroups = []
+      this.selectedGroupId = undefined
+      this.goods = []
+    },
+    setPointsStoreId(value: number) {
+      const v = Number(value)
+      if (!Number.isFinite(v) || v <= 0) return
+      this.pointsStoreId = Math.floor(v)
+    },
+    setPointsRootCategoryId(value: number) {
+      const v = Number(value)
+      if (!Number.isFinite(v) || v <= 0) return
+      this.pointsRootCategoryId = Math.floor(v)
+    },
     setSelectedGroupId(id: number | undefined) {
       this.selectedGroupId = typeof id === 'number' ? id : undefined
     },
@@ -153,45 +192,85 @@ export const useGoodsStore = defineStore('goods', {
       }
     },
     async loadCategories(token: string) {
-      if (!this.locationReady) throw new Error('缺少经纬度，请先选择收货地址')
       this.categoriesLoading = true
       try {
-        const data = await apiFetchShopCategoryTree(token, {
-          frontCategoryId: ROOT_FRONT_CATEGORY_ID,
-          longitude: this.longitude as number,
-          latitude: this.latitude as number,
-          isFinish: true,
-        })
-        const normalized = Array.isArray(data) ? data.map(normalizeCategoryNode) : []
-        this.categories = normalized
+        if (this.mode === 'points') {
+          const list = await apiListShopCategoryByParent(token, {
+            frontCategoryId: this.pointsRootCategoryId,
+            storeId: this.pointsStoreId,
+            type: this.pointsType,
+          })
+          const children = Array.isArray(list) ? list.map(normalizeCategoryNode) : []
+          const root: ShopCategoryNode = {
+            id: this.pointsRootCategoryId,
+            pid: 0,
+            level: 0,
+            name: '积分商品',
+            hasChildren: true,
+            childrenList: children,
+          }
+          this.categories = [root]
+          this.selectedCategoryId = undefined
+        } else {
+          if (!this.locationReady) throw new Error('缺少经纬度，请先选择收货地址')
+          const data = await apiFetchShopCategoryTree(token, {
+            frontCategoryId: ROOT_FRONT_CATEGORY_ID,
+            longitude: this.longitude as number,
+            latitude: this.latitude as number,
+            isFinish: true,
+          })
+          const normalized = Array.isArray(data) ? data.map(normalizeCategoryNode) : []
+          this.categories = normalized
 
-        const exists = typeof this.selectedCategoryId === 'number' && treeHasCategoryId(normalized, this.selectedCategoryId)
-        if (!exists) this.selectedCategoryId = undefined
+          const exists =
+            typeof this.selectedCategoryId === 'number' && treeHasCategoryId(normalized, this.selectedCategoryId)
+          if (!exists) this.selectedCategoryId = undefined
+        }
       } finally {
         this.categoriesLoading = false
       }
     },
     async loadGoodsByCategory(token: string, frontCategoryId: number, pageNo = 1, pageSize = 500) {
-      if (!this.locationReady) throw new Error('缺少经纬度，请先选择收货地址')
       const cid = Number(frontCategoryId)
       if (!Number.isFinite(cid)) throw new Error('分类ID不正确')
 
       this.goodsLoading = true
       try {
-        const groups = await apiSearchStoreSkuByCategory(token, {
-          pageNo,
-          pageSize,
-          frontCategoryId: cid,
-          longitude: this.longitude as number,
-          latitude: this.latitude as number,
-          isFinish: true,
-        })
-        const normalizedGroups = Array.isArray(groups) ? groups.map(normalizeSkuGroup) : []
-        this.skuGroups = normalizedGroups
-        this.goods = normalizedGroups.flatMap((g) => g.storeSkuModelList.map((sku) => skuToGoodsItem(sku, g)))
+        if (this.mode === 'points') {
+          const groups = await apiSearchPointsSkuByCategory(token, {
+            frontCategoryId: cid,
+            pageNo,
+            pageSize,
+            storeIds: this.pointsStoreId,
+            promotionRender: false,
+          })
+          const normalizedGroups = Array.isArray(groups) ? groups.map(normalizeSkuGroup) : []
+          this.skuGroups = normalizedGroups
+          this.goods = normalizedGroups.flatMap((g) => g.storeSkuModelList.map((sku) => skuToPointsGoodsItem(sku, g)))
 
-        const groupExists = typeof this.selectedGroupId === 'number' && normalizedGroups.some((g) => g.categoryId === this.selectedGroupId)
-        if (!groupExists) this.selectedGroupId = undefined
+          const groupExists =
+            typeof this.selectedGroupId === 'number' &&
+            normalizedGroups.some((g) => g.categoryId === this.selectedGroupId)
+          if (!groupExists) this.selectedGroupId = undefined
+        } else {
+          if (!this.locationReady) throw new Error('缺少经纬度，请先选择收货地址')
+          const groups = await apiSearchStoreSkuByCategory(token, {
+            pageNo,
+            pageSize,
+            frontCategoryId: cid,
+            longitude: this.longitude as number,
+            latitude: this.latitude as number,
+            isFinish: true,
+          })
+          const normalizedGroups = Array.isArray(groups) ? groups.map(normalizeSkuGroup) : []
+          this.skuGroups = normalizedGroups
+          this.goods = normalizedGroups.flatMap((g) => g.storeSkuModelList.map((sku) => skuToGoodsItem(sku, g)))
+
+          const groupExists =
+            typeof this.selectedGroupId === 'number' &&
+            normalizedGroups.some((g) => g.categoryId === this.selectedGroupId)
+          if (!groupExists) this.selectedGroupId = undefined
+        }
       } finally {
         this.goodsLoading = false
       }

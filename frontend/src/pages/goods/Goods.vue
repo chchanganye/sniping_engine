@@ -14,6 +14,7 @@ const tasksStore = useTasksStore()
 
 const { accounts } = storeToRefs(accountsStore)
 const {
+  mode,
   addresses,
   addressesLoading,
   selectedAddressId,
@@ -26,6 +27,8 @@ const {
   selectedGroupId,
   goods,
   goodsLoading,
+  pointsStoreId,
+  pointsRootCategoryId,
 } = storeToRefs(goodsStore)
 
 const accountId = ref<string>('')
@@ -37,6 +40,21 @@ const accountOptions = computed(() =>
 )
 
 const currentAccount = computed(() => accounts.value.find((a) => a.id === accountId.value) ?? null)
+
+const modeModel = computed<'normal' | 'points'>({
+  get: () => mode.value,
+  set: (value) => goodsStore.setMode(value),
+})
+
+const pointsStoreIdModel = computed<number>({
+  get: () => pointsStoreId.value,
+  set: (value) => goodsStore.setPointsStoreId(value),
+})
+
+const pointsRootCategoryIdModel = computed<number>({
+  get: () => pointsRootCategoryId.value,
+  set: (value) => goodsStore.setPointsRootCategoryId(value),
+})
 
 const addressIdModel = computed<number | undefined>({
   get: () => selectedAddressId.value,
@@ -101,6 +119,14 @@ function formatPrice(value?: number) {
   return `￥${(value / 100).toFixed(2)}`
 }
 
+function formatGoodsPrice(item: any) {
+  if (item?.priceUnit === 'points') {
+    if (typeof item?.price !== 'number') return '-'
+    return `${item.price} 积分`
+  }
+  return formatPrice(item?.price)
+}
+
 const groupModel = computed<string>({
   get: () => (typeof selectedGroupId.value === 'number' ? String(selectedGroupId.value) : 'all'),
   set: (value) => {
@@ -153,11 +179,23 @@ watch(selectedGroupId, () => {
 
 watch(accountId, () => {
   void refreshAddresses()
+  if (mode.value === 'points') {
+    void refreshCategories()
+  }
 })
 
 watch(selectedAddressId, async (id) => {
   if (!id) return
   await refreshCategories()
+})
+
+watch(mode, () => {
+  void refreshCategories()
+})
+
+watch([pointsStoreId, pointsRootCategoryId], () => {
+  if (mode.value !== 'points') return
+  void refreshCategories()
 })
 
 watch(
@@ -196,6 +234,28 @@ onMounted(async () => {
                 <el-select v-model="accountId" placeholder="选择已登录账号" style="width: 220px">
                   <el-option v-for="opt in accountOptions" :key="opt.value" :label="opt.label" :value="opt.value" />
                 </el-select>
+                <el-radio-group v-model="modeModel" size="small">
+                  <el-radio-button label="normal">普通商品</el-radio-button>
+                  <el-radio-button label="points">积分商品</el-radio-button>
+                </el-radio-group>
+                <el-tooltip v-if="modeModel === 'points'" content="storeId（门店ID）" placement="top">
+                  <el-input-number
+                    v-model="pointsStoreIdModel"
+                    :min="1"
+                    :step="1"
+                    controls-position="right"
+                    style="width: 220px"
+                  />
+                </el-tooltip>
+                <el-tooltip v-if="modeModel === 'points'" content="frontCategoryId（积分根分类）" placement="top">
+                  <el-input-number
+                    v-model="pointsRootCategoryIdModel"
+                    :min="1"
+                    :step="1"
+                    controls-position="right"
+                    style="width: 220px"
+                  />
+                </el-tooltip>
                 <el-button :loading="addressesLoading" @click="refreshAddresses" :disabled="!accountId">
                   刷新地址
                 </el-button>
@@ -284,7 +344,7 @@ onMounted(async () => {
               </template>
             </el-table-column>
             <el-table-column label="价格" width="120">
-              <template #default="{ row }">{{ formatPrice(row.price) }}</template>
+              <template #default="{ row }">{{ formatGoodsPrice(row) }}</template>
             </el-table-column>
             <el-table-column label="库存" width="90">
               <template #default="{ row }">{{ typeof row.stock === 'number' ? row.stock : '-' }}</template>
