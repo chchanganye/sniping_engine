@@ -146,7 +146,8 @@ func (c *Config) applyDefaults() {
 		c.Provider.BaseURL = "http://127.0.0.1:8080/mock"
 	}
 	if c.Provider.UserAgent == "" {
-		c.Provider.UserAgent = "sniping_engine/standard-provider"
+		// 默认用“手机端/微信小程序”UA，避免被上游识别为 PC
+		c.Provider.UserAgent = "Mozilla/5.0 (iPhone; CPU iPhone OS 18_7 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Mobile/15E148 MicroMessenger/8.0.66(0x18004235) NetType/WIFI Language/zh_CN"
 	}
 	if c.Provider.DeviceType == "" {
 		c.Provider.DeviceType = "WXAPP"

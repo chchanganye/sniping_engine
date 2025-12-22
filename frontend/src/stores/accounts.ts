@@ -3,6 +3,9 @@ import type { Account } from '@/types/core'
 import { apiLoginByPassword, apiLoginBySmsCode } from '@/services/api'
 import { beDeleteAccount, beListAccounts, beUpsertAccount, type BackendAccount } from '@/services/backend'
 
+const DEFAULT_WXAPP_UA =
+  'Mozilla/5.0 (iPhone; CPU iPhone OS 18_7 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Mobile/15E148 MicroMessenger/8.0.66(0x18004235) NetType/WIFI Language/zh_CN'
+
 function normalizeAccount(raw: BackendAccount): Account {
   const token = typeof raw.token === 'string' && raw.token.trim() ? raw.token : undefined
   return {
@@ -87,11 +90,7 @@ export const useAccountsStore = defineStore('accounts', {
       if (!smsCode) throw new Error('请输入短信验证码')
 
       const existing = this.accounts.find((a) => a.mobile === mobile) ?? null
-      const userAgent =
-        payload.userAgent?.trim() ||
-        existing?.userAgent ||
-        (typeof navigator !== 'undefined' ? navigator.userAgent : '') ||
-        undefined
+      const userAgent = normalizeWXAppUserAgent(payload.userAgent?.trim() || existing?.userAgent)
       const deviceId = payload.deviceId?.trim() || existing?.deviceId || randomHex(16)
       const uuid = payload.uuid?.trim() || existing?.uuid || `${Date.now()}_${randomHex(10)}`
 
@@ -138,7 +137,7 @@ export const useAccountsStore = defineStore('accounts', {
       if (!password) throw new Error('请输入密码')
 
       const existing = this.accounts.find((a) => a.mobile === mobile) ?? null
-      const userAgent = payload.userAgent?.trim() || existing?.userAgent || undefined
+      const userAgent = normalizeWXAppUserAgent(payload.userAgent?.trim() || existing?.userAgent)
       const deviceId = payload.deviceId?.trim() || existing?.deviceId || randomHex(16)
       const uuid = payload.uuid?.trim() || existing?.uuid || `${Date.now()}_${randomHex(10)}`
 
@@ -203,4 +202,12 @@ function randomHex(bytes: number): string {
     for (let i = 0; i < bytes; i += 1) buf[i] = Math.floor(Math.random() * 256)
   }
   return Array.from(buf, (b) => b.toString(16).padStart(2, '0')).join('')
+}
+
+function normalizeWXAppUserAgent(ua?: string): string {
+  const v = String(ua ?? '').trim()
+  if (!v) return DEFAULT_WXAPP_UA
+  const s = v.toLowerCase()
+  if (s.includes('micromessenger') || s.includes('mobile') || s.includes('iphone') || s.includes('android')) return v
+  return DEFAULT_WXAPP_UA
 }

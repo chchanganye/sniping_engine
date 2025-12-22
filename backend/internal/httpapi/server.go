@@ -25,6 +25,8 @@ import (
 	"sniping_engine/internal/ws"
 )
 
+const defaultTenantID = "1"
+
 type Options struct {
 	Cfg      config.Config
 	Bus      *logbus.Bus
@@ -828,9 +830,10 @@ func (s *Server) newAnonymousUpstreamClient(jar *cookiejar.Jar, userAgent string
 	if ua == "" {
 		ua = strings.TrimSpace(s.cfg.Provider.UserAgent)
 	}
-	if ua != "" {
-		client.SetHeader("User-Agent", ua)
-	}
+	client.SetHeader("User-Agent", utils.NormalizeWXAppUserAgent(ua))
+	client.SetHeader("device-type", "WXAPP")
+	client.SetHeader("tenantId", defaultTenantID)
+	client.SetHeader("x-requested-with", "XMLHttpRequest")
 
 	client.OnBeforeRequest(func(_ *resty.Client, req *resty.Request) error {
 		if s.bus != nil {
@@ -951,9 +954,10 @@ func (s *Server) fetchCurrentUserUsername(ctx context.Context, jar *cookiejar.Ja
 	if ua == "" {
 		ua = strings.TrimSpace(s.cfg.Provider.UserAgent)
 	}
-	if ua != "" {
-		client.SetHeader("User-Agent", ua)
-	}
+	client.SetHeader("User-Agent", utils.NormalizeWXAppUserAgent(ua))
+	client.SetHeader("device-type", "WXAPP")
+	client.SetHeader("tenantId", defaultTenantID)
+	client.SetHeader("x-requested-with", "XMLHttpRequest")
 
 	client.SetHeader("Authorization", "Bearer "+strings.TrimSpace(token))
 	client.SetHeader("token", strings.TrimSpace(token))
@@ -1103,9 +1107,10 @@ func (s *Server) newUpstreamClient(account model.Account) (*resty.Client, *cooki
 	if ua == "" {
 		ua = strings.TrimSpace(s.cfg.Provider.UserAgent)
 	}
-	if ua != "" {
-		client.SetHeader("User-Agent", ua)
-	}
+	client.SetHeader("User-Agent", utils.NormalizeWXAppUserAgent(ua))
+	client.SetHeader("device-type", "WXAPP")
+	client.SetHeader("tenantId", defaultTenantID)
+	client.SetHeader("x-requested-with", "XMLHttpRequest")
 	if account.Token != "" {
 		client.SetHeader("Authorization", "Bearer "+account.Token)
 		client.SetHeader("token", account.Token)

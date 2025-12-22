@@ -62,7 +62,7 @@ export async function apiLoginBySmsCode(params: LoginBySmsCodeParams): Promise<L
     app: params.app ?? true,
     deviceId: params.deviceId ?? defaultDeviceId(),
     deviceType: params.deviceType ?? 'WXAPP',
-    userAgent: params.userAgent ?? defaultUserAgent(),
+    userAgent: params.userAgent ?? defaultMobileUserAgent(),
     uuid: params.uuid ?? defaultUuid(),
     deviceSource: params.deviceSource ?? defaultDeviceSource(),
   }
@@ -161,14 +161,9 @@ function defaultUuid(): string {
   return `${Date.now()}_${randomHex(10)}`
 }
 
-function defaultUserAgent(): string {
-  if (typeof navigator === 'undefined') return ''
-  return navigator.userAgent
-}
-
 function defaultMobileUserAgent(): string {
-  // 统一用一个“像手机”的 UA，避免在桌面浏览器上登录时被识别为 PC
-  return 'Mozilla/5.0 (Linux; Android 13; Pixel 7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Mobile Safari/537.36'
+  // 统一用“微信小程序/手机端”UA，避免在桌面浏览器上被识别为 PC
+  return 'Mozilla/5.0 (iPhone; CPU iPhone OS 18_7 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Mobile/15E148 MicroMessenger/8.0.66(0x18004235) NetType/WIFI Language/zh_CN'
 }
 
 function defaultDeviceSource(): string {

@@ -489,7 +489,10 @@ func (p *StandardProvider) newClient(account model.Account) (*resty.Client, *coo
 	if ua == "" {
 		ua = p.cfg.UserAgent
 	}
-	client.SetHeader("User-Agent", ua)
+	client.SetHeader("User-Agent", utils.NormalizeWXAppUserAgent(ua))
+	client.SetHeader("device-type", "WXAPP")
+	client.SetHeader("tenantId", "1")
+	client.SetHeader("x-requested-with", "XMLHttpRequest")
 	if account.Token != "" {
 		client.SetHeader("Authorization", "Bearer "+account.Token)
 		client.SetHeader("token", account.Token)
