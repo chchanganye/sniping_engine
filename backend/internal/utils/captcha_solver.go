@@ -10,8 +10,11 @@ import (
 	"io"
 	"math"
 	"math/rand"
+	"net"
 	"net/http"
+	"os"
 	"strconv"
+	"strings"
 	"sync"
 	"time"
 
@@ -22,7 +25,7 @@ import (
 	"github.com/go-rod/stealth"
 )
 
-// --- 配置区域 ---
+// --- 并发配置 ---
 var (
 	captchaSemaphoreMu sync.RWMutex
 	captchaSemaphore   = make(chan struct{}, 1)
@@ -62,29 +65,31 @@ const (
 	JfbymApiUrl = "http://api.jfbym.com/api/YmServer/customApi"
 	JfbymType   = "20111"
 
-	// ⬇️ 滑动偏移量
+	// 滑动偏移量（如需要可调）。
 	SlideOffset = 0.0
 
-	// ⬇️ 无头模式开关：false 表示显示浏览器窗口（方便调试），true 表示无头模式（生产环境使用）
+	// 无头模式开关：false 表示显示浏览器窗口（方便调试），true 表示无头模式（生产环境使用）。
 	HeadlessMode = true
 )
 
-// API 结构体
 type solveRequest struct {
 	SlideImage      string `json:"slide_image"`
 	BackgroundImage string `json:"background_image"`
 	Token           string `json:"token"`
 	Type            string `json:"type"`
 }
+
 type solveResponse struct {
 	Code int             `json:"code"`
 	Msg  string          `json:"msg"`
 	Data json.RawMessage `json:"data"`
 }
+
 type solveItem struct {
 	Code int    `json:"code"`
 	Data string `json:"data"`
 }
+
 type AliResult struct {
 	Result struct {
 		CertifyId     string `json:"certifyId"`
@@ -102,23 +107,220 @@ type OutputResult struct {
 	SecurityToken string `json:"securityToken"`
 }
 
-// Point 坐标点
+// Point 坐标点。
 type Point struct {
 	X, Y float64
 }
 
-// SolveAliyunCaptcha 执行验证码验证并返回 Base64 编码的结果
+// --- 浏览器与 HTTP Client 复用 ---
+var (
+	captchaBrowserMu       sync.Mutex
+	captchaBrowser         *rod.Browser
+	captchaBrowserLauncher *launcher.Launcher
+
+	// 复用 HTTP Client，利用 Keep-Alive 连接池，减少 TCP/TLS 握手开销。
+	captchaHTTPClient = newCaptchaHTTPClient()
+)
+
+// WarmupCaptchaBrowser 预热验证码浏览器（可选）。
+// 不调用也没关系，首次 SolveAliyunCaptcha 时会自动初始化。
+func WarmupCaptchaBrowser() error {
+	_, err := getCaptchaBrowser()
+	return err
+}
+
+// CloseCaptchaBrowser 关闭全局验证码浏览器（通常在进程退出时调用）。
+func CloseCaptchaBrowser() error {
+	captchaBrowserMu.Lock()
+	defer captchaBrowserMu.Unlock()
+
+	var firstErr error
+	if captchaBrowser != nil {
+		if err := captchaBrowser.Close(); err != nil && firstErr == nil {
+			firstErr = err
+		}
+		captchaBrowser = nil
+	}
+	if captchaBrowserLauncher != nil {
+		captchaBrowserLauncher.Kill()
+		captchaBrowserLauncher = nil
+	}
+	return firstErr
+}
+
+func getCaptchaBrowser() (*rod.Browser, error) {
+	captchaBrowserMu.Lock()
+	defer captchaBrowserMu.Unlock()
+
+	if captchaBrowser != nil {
+		return captchaBrowser, nil
+	}
+
+	l := launcher.New().Headless(HeadlessMode)
+	u, err := l.Launch()
+	if err != nil {
+		l.Kill()
+		return nil, err
+	}
+
+	b := rod.New().ControlURL(u)
+	if err := b.Connect(); err != nil {
+		l.Kill()
+		return nil, err
+	}
+
+	captchaBrowser = b
+	captchaBrowserLauncher = l
+	return captchaBrowser, nil
+}
+
+func newCaptchaHTTPClient() *http.Client {
+	dialer := &net.Dialer{
+		Timeout:   5 * time.Second,
+		KeepAlive: 30 * time.Second,
+	}
+	return &http.Client{
+		Timeout: 10 * time.Second,
+		Transport: &http.Transport{
+			Proxy:                 http.ProxyFromEnvironment,
+			DialContext:           dialer.DialContext,
+			ForceAttemptHTTP2:     true,
+			MaxIdleConns:          100,
+			MaxIdleConnsPerHost:   100,
+			IdleConnTimeout:       90 * time.Second,
+			TLSHandshakeTimeout:   5 * time.Second,
+			ExpectContinueTimeout: 1 * time.Second,
+		},
+	}
+}
+
+func drainFloat64Chan(ch chan float64) {
+	for {
+		select {
+		case <-ch:
+		default:
+			return
+		}
+	}
+}
+
+func drainStringChan(ch chan string) {
+	for {
+		select {
+		case <-ch:
+		default:
+			return
+		}
+	}
+}
+
+func clickCaptchaButton(page *rod.Page) error {
+	debugEnabled := func() bool {
+		v := strings.TrimSpace(os.Getenv("SNIPING_ENGINE_CAPTCHA_DEBUG"))
+		return strings.EqualFold(v, "1") || strings.EqualFold(v, "true")
+	}
+	debugf := func(format string, args ...any) {
+		if !debugEnabled() {
+			return
+		}
+		fmt.Printf("[验证码调试] "+format+"\n", args...)
+	}
+
+	isSliderReady := func(p *rod.Page) bool {
+		el, err := p.Timeout(300 * time.Millisecond).Element("#aliyunCaptcha-sliding-slider")
+		if err != nil {
+			return false
+		}
+		v, _ := el.Visible()
+		return v
+	}
+
+	waitSliderReady := func(p *rod.Page, d time.Duration) bool {
+		deadline := time.Now().Add(d)
+		for time.Now().Before(deadline) {
+			if isSliderReady(p) {
+				return true
+			}
+			time.Sleep(120 * time.Millisecond)
+		}
+		return false
+	}
+
+	clickByID := func(p *rod.Page) bool {
+		res, err := p.Timeout(2 * time.Second).Eval(`() => {
+			const btn = document.getElementById('button');
+			if (!btn) return false;
+			try { btn.scrollIntoView({block: 'center', inline: 'center'}); } catch (e) {}
+			try { btn.click(); } catch (e) { return false; }
+			return true;
+		}`)
+		return err == nil && res != nil && res.Value.Bool()
+	}
+
+	if isSliderReady(page) {
+		return nil
+	}
+
+	// 根据你提供的结构：固定使用 #button（安全验证）即可，避免过度兼容带来不稳定。
+	btn, err := page.Timeout(6 * time.Second).Element("#button")
+	if err == nil {
+		_ = rod.Try(func() {
+			btn.Timeout(3 * time.Second).MustWaitVisible()
+			_ = btn.ScrollIntoView()
+			btn.MustClick()
+		})
+		debugf("已尝试点击：Rod 点击（#button）")
+		if waitSliderReady(page, 6*time.Second) {
+			debugf("已进入滑块阶段：Rod 点击（#button）")
+			return nil
+		}
+	}
+
+	// 兜底：Rod 点击不生效时用 JS click()
+	if clickByID(page) {
+		debugf("已尝试点击：JS 点击（document.getElementById('button').click()）")
+		if waitSliderReady(page, 6*time.Second) {
+			debugf("已进入滑块阶段：JS 点击（document.getElementById('button').click()）")
+			return nil
+		}
+	}
+
+	return errors.New("点击“安全验证”后未进入滑块阶段")
+}
+
+func extractSceneID(page *rod.Page) string {
+	result, err := page.Eval(`() => {
+		let scripts = document.getElementsByTagName('script');
+		for (let s of scripts) {
+			let match = s.textContent.match(/SceneId:\s*["']([^"']+)["']/);
+			if (match) return match[1];
+		}
+		return '';
+	}`)
+	if err != nil {
+		return ""
+	}
+	return result.Value.Str()
+}
+
+func navigateCaptchaPage(page *rod.Page, targetURL string) error {
+	waitDom := page.WaitNavigation(proto.PageLifecycleEventNameDOMContentLoaded)
+	if err := page.Navigate(targetURL); err != nil {
+		return err
+	}
+	waitDom()
+	return nil
+}
+
+// SolveAliyunCaptcha 执行验证码验证并返回 Base64 编码的结果。
 func SolveAliyunCaptcha(timestamp int64, dracoToken string) (string, error) {
 	return SolveAliyunCaptchaWithContext(context.Background(), timestamp, dracoToken)
 }
 
-// SolveAliyunCaptchaWithContext 执行验证码验证并返回 Base64 编码的结果（支持 ctx 取消）
+// SolveAliyunCaptchaWithContext 执行验证码验证并返回 Base64 编码的结果（支持 ctx 取消）。
 func SolveAliyunCaptchaWithContext(parent context.Context, timestamp int64, dracoToken string) (string, error) {
 	rand.Seed(time.Now().UnixNano())
 
-	// 设置总超时时间，并限制无头浏览器并发，避免多账号同时解码把机器打满
-
-	// 设置总超时时间，并限制无头浏览器并发，避免多账号同时解码把机器打满
 	ctx, cancel := context.WithTimeout(parent, 360*time.Second)
 	defer cancel()
 
@@ -128,48 +330,50 @@ func SolveAliyunCaptchaWithContext(parent context.Context, timestamp int64, drac
 	}
 	defer release()
 
-	// 构造目标 URL
-	targetUrl := fmt.Sprintf(
-		"https://m.4008117117.com/aliyun-captcha?t=%d&cookie=true&draco_local=%s",
-		timestamp, dracoToken,
-	)
+	makeTargetURL := func(attempt int) string {
+		t := timestamp
+		if attempt > 1 {
+			t = time.Now().UnixMilli()
+		}
+		// 额外带一个随机参数，避免中间层缓存导致不刷新验证码资源。
+		return fmt.Sprintf("https://m.4008117117.com/aliyun-captcha?t=%d&cookie=true&draco_local=%s&r=%d", t, dracoToken, rand.Int63())
+	}
 
-	// 1. 启动浏览器
-	u := launcher.New().Headless(HeadlessMode).MustLaunch()
-	browser := rod.New().ControlURL(u).MustConnect()
+	mainBrowser, err := getCaptchaBrowser()
+	if err != nil {
+		return "", err
+	}
 
-	defer func() {
-		_ = browser.Close()
-		launcher.New().Kill()
-	}()
+	incognito, err := mainBrowser.Incognito()
+	if err != nil {
+		return "", err
+	}
+	defer func() { _ = incognito.Close() }()
 
-	page := stealth.MustPage(browser)
-	page.MustEmulate(devices.IPhoneX)
+	var page *rod.Page
+	if err := rod.Try(func() {
+		page = stealth.MustPage(incognito).Context(ctx)
+		page.MustEmulate(devices.IPhoneX)
+	}); err != nil {
+		return "", err
+	}
+	defer func() { _ = page.Close() }()
 
-	// 设置总超时时间
-	router := page.HijackRequests()
-	defer router.MustStop()
-
-	// 2. 状态管理
+	// --- 状态 ---
 	var (
-		mu            sync.Mutex
-		backB64       string
-		shadowB64     string
-		hasTriggered  bool
-		retryCount    int
+		mu           sync.Mutex
+		backB64      string
+		shadowB64    string
+		hasTriggered bool
+
+		pageSceneID   string
 		verifySuccess bool
-		pageSceneId   string
 		finalResult   string
-		errResult     error
+		lastErr       error
 	)
 
-	sliderElCh := make(chan *rod.Element, 100)
 	apiXCh := make(chan float64, 10)
 	verifyResultCh := make(chan string, 10)
-
-	// 【新增】控制点击停止的信号
-	stopClicking := make(chan struct{})
-	var stopClickingOnce sync.Once
 
 	resetState := func() {
 		mu.Lock()
@@ -177,31 +381,33 @@ func SolveAliyunCaptchaWithContext(parent context.Context, timestamp int64, drac
 		shadowB64 = ""
 		hasTriggered = false
 		mu.Unlock()
+
+		drainFloat64Chan(apiXCh)
+		drainStringChan(verifyResultCh)
 	}
 
-	// --- 异步打码 ---
 	checkAndSolve := func() {
 		mu.Lock()
-		defer mu.Unlock()
 		if hasTriggered || backB64 == "" || shadowB64 == "" {
+			mu.Unlock()
 			return
 		}
 		hasTriggered = true
+		slide := shadowB64
+		bg := backB64
+		mu.Unlock()
 
-		fmt.Printf("⚡️ [第%d次] 图片集齐，请求打码...\n", retryCount+1)
 		go func() {
 			reqBody := solveRequest{
-				SlideImage:      shadowB64,
-				BackgroundImage: backB64,
+				SlideImage:      slide,
+				BackgroundImage: bg,
 				Token:           JfbymToken,
 				Type:            JfbymType,
 			}
 			bs, _ := json.Marshal(reqBody)
 
-			client := &http.Client{Timeout: 10 * time.Second}
-			resp, err := client.Post(JfbymApiUrl, "application/json", bytes.NewReader(bs))
+			resp, err := captchaHTTPClient.Post(JfbymApiUrl, "application/json", bytes.NewReader(bs))
 			if err != nil {
-				fmt.Println("❌ 打码请求失败:", err)
 				return
 			}
 			defer resp.Body.Close()
@@ -213,231 +419,211 @@ func SolveAliyunCaptchaWithContext(parent context.Context, timestamp int64, drac
 			}
 
 			var items []solveItem
-			json.Unmarshal(sr.Data, &items)
+			_ = json.Unmarshal(sr.Data, &items)
 			if len(items) == 0 {
 				var single solveItem
-				json.Unmarshal(sr.Data, &single)
-				items = append(items, single)
+				if json.Unmarshal(sr.Data, &single) == nil {
+					items = append(items, single)
+				}
 			}
 
 			for _, d := range items {
-				if d.Code == 0 {
-					val, _ := strconv.ParseFloat(d.Data, 64)
-					fmt.Printf("✅ 打码成功，坐标: %.2f\n", val)
-					apiXCh <- val
-					return
+				if d.Code != 0 {
+					continue
 				}
+				val, err := strconv.ParseFloat(d.Data, 64)
+				if err != nil {
+					continue
+				}
+				select {
+				case apiXCh <- val:
+				default:
+				}
+				return
 			}
 		}()
 	}
 
-	// --- 拦截器 ---
-	router.MustAdd("*back.png*", func(ctx *rod.Hijack) {
-		ctx.LoadResponse(http.DefaultClient, true)
-		body := ctx.Response.Payload().Body
-		if len(body) > 0 {
-			b64 := base64.StdEncoding.EncodeToString(body)
-			mu.Lock()
-			backB64 = b64
-			mu.Unlock()
-			fmt.Println("🖼️ 拦截到背景图")
-			checkAndSolve()
-		}
-	})
-	router.MustAdd("*shadow.png*", func(ctx *rod.Hijack) {
-		ctx.LoadResponse(http.DefaultClient, true)
-		body := ctx.Response.Payload().Body
-		if len(body) > 0 {
-			b64 := base64.StdEncoding.EncodeToString(body)
-			mu.Lock()
-			shadowB64 = b64
-			mu.Unlock()
-			fmt.Println("🖼️ 拦截到滑块图")
-			checkAndSolve()
-		}
-	})
-	router.MustAdd("*7atwlq.captcha-open.aliyuncs.com*", func(ctx *rod.Hijack) {
-		ctx.LoadResponse(http.DefaultClient, true)
-		body := ctx.Response.Payload().Body
-		var res AliResult
-		if json.Unmarshal(body, &res) == nil {
-			if res.Result.VerifyResult != nil {
-				if *res.Result.VerifyResult && res.Result.SecurityToken != "" {
-					sceneId := pageSceneId
-					if sceneId == "" {
-						sceneId = res.Result.SceneId
-					}
-					output := OutputResult{
-						CertifyId:     res.Result.CertifyId,
-						SceneId:       sceneId,
-						IsSign:        true,
-						SecurityToken: res.Result.SecurityToken,
-					}
-					orderedJson, _ := json.Marshal(output)
-					jsonBase64 := base64.StdEncoding.EncodeToString(orderedJson)
-					verifyResultCh <- jsonBase64
-				} else if !*res.Result.VerifyResult {
-					verifyResultCh <- ""
-				}
-			}
-		}
-	})
-	go router.Run()
+	// --- 请求拦截：丢弃非必须资源（加速 Load 与并发能力）---
+	router := page.HijackRequests()
+	defer func() { _ = router.Stop() }()
 
-	// --- 3. 页面交互 ---
-	fmt.Println("🚀 打开页面...")
-	if err := page.Navigate(targetUrl); err != nil {
-		return "", fmt.Errorf("打开页面失败: %v", err)
+	// 注意：拦截过多资源可能导致验证码页面“白屏/不渲染”。
+	// 默认不做额外拦截；如你确认页面能正常显示，再通过环境变量开启：
+	// SNIPING_ENGINE_CAPTCHA_BLOCK_RESOURCES=1
+	blockResources := strings.EqualFold(strings.TrimSpace(os.Getenv("SNIPING_ENGINE_CAPTCHA_BLOCK_RESOURCES")), "1") ||
+		strings.EqualFold(strings.TrimSpace(os.Getenv("SNIPING_ENGINE_CAPTCHA_BLOCK_RESOURCES")), "true")
+	if blockResources {
+		router.MustAdd("*", func(ctx *rod.Hijack) {
+			u := ctx.Request.URL().String()
+			if strings.Contains(u, "back.png") ||
+				strings.Contains(u, "shadow.png") ||
+				strings.Contains(u, "captcha-open.aliyuncs.com") {
+				ctx.Skip = true
+				return
+			}
+
+			switch ctx.Request.Type() {
+			// 不要拦截得太激进，否则验证码页面可能渲染不出来（尤其是某些脚本依赖样式/图片）。
+			// 目前只丢弃“字体/媒体”两类资源，兼顾稳定性与速度。
+			case proto.NetworkResourceTypeFont,
+				proto.NetworkResourceTypeMedia:
+				ctx.Response.Fail(proto.NetworkErrorReasonBlockedByClient)
+				return
+			default:
+				ctx.ContinueRequest(&proto.FetchContinueRequest{})
+				return
+			}
+		})
 	}
 
-	// 提取 SceneId
-	go func() {
-		_ = page.WaitLoad()
-		if result, err := page.Eval(`() => {
-			let scripts = document.getElementsByTagName('script');
-			for (let s of scripts) {
-				let match = s.textContent.match(/SceneId:\s*["']([^"']+)["']/);
-				if (match) return match[1];
-			}
-			return '';
-		}`); err == nil {
-			pageSceneId = result.Value.Str()
+	router.MustAdd("*back.png*", func(ctx *rod.Hijack) {
+		_ = ctx.LoadResponse(captchaHTTPClient, true)
+		body := ctx.Response.Payload().Body
+		if len(body) == 0 {
+			return
 		}
-	}()
+		b64 := base64.StdEncoding.EncodeToString(body)
+		mu.Lock()
+		backB64 = b64
+		mu.Unlock()
+		checkAndSolve()
+	})
 
-	// ------------------------------------------------------------------
-	// 【关键修正】点击按钮协程
-	// 逻辑：一直尝试点击，直到收到 stopClicking 信号（即滑块可见）才停止
-	// ------------------------------------------------------------------
-	go func() {
-		selectors := []string{"#button", "#aliyunCaptcha-btn", "button[type='button']", ".btn"}
-		ticker := time.NewTicker(300 * time.Millisecond)
-		defer ticker.Stop()
+	router.MustAdd("*shadow.png*", func(ctx *rod.Hijack) {
+		_ = ctx.LoadResponse(captchaHTTPClient, true)
+		body := ctx.Response.Payload().Body
+		if len(body) == 0 {
+			return
+		}
+		b64 := base64.StdEncoding.EncodeToString(body)
+		mu.Lock()
+		shadowB64 = b64
+		mu.Unlock()
+		checkAndSolve()
+	})
 
-		for {
+	router.MustAdd("*captcha-open.aliyuncs.com*", func(ctx *rod.Hijack) {
+		_ = ctx.LoadResponse(captchaHTTPClient, true)
+		body := ctx.Response.Payload().Body
+
+		var res AliResult
+		if json.Unmarshal(body, &res) != nil {
+			return
+		}
+
+		if res.Result.VerifyResult == nil {
+			return
+		}
+
+		if *res.Result.VerifyResult && res.Result.SecurityToken != "" {
+			sceneID := pageSceneID
+			if sceneID == "" {
+				sceneID = res.Result.SceneId
+			}
+			output := OutputResult{
+				CertifyId:     res.Result.CertifyId,
+				SceneId:       sceneID,
+				IsSign:        true,
+				SecurityToken: res.Result.SecurityToken,
+			}
+			orderedJSON, _ := json.Marshal(output)
+			jsonBase64 := base64.StdEncoding.EncodeToString(orderedJSON)
 			select {
-			case <-ctx.Done():
-				return
-			case <-stopClicking: // 收到停止信号，退出
-				fmt.Println("🛑 滑块已可见，停止点击按钮")
-				return
-			case <-ticker.C:
-				clicked := false
-				for _, sel := range selectors {
-					if el, err := page.Element(sel); err == nil {
-						if v, _ := el.Visible(); v {
-							_ = el.ScrollIntoView()
-							_ = el.Click(proto.InputMouseButtonLeft, 1)
-							fmt.Printf("👉 点击验证按钮: %s\n", sel)
-							clicked = true
-							break
-						}
-					}
-				}
-				// 兜底 JS 点击
-				if !clicked {
-					_, _ = page.Eval(`() => {
-						let btn = document.getElementById('button');
-						if(btn) btn.click();
-					}`)
-				}
+			case verifyResultCh <- jsonBase64:
+			default:
 			}
+			return
 		}
-	}()
 
-	// ------------------------------------------------------------------
-	// 【关键修正】找滑块协程
-	// 逻辑：一旦滑块可见，立即发送 stopClicking 信号，并将滑块对象发给主流程
-	// ------------------------------------------------------------------
-	go func() {
-		ticker := time.NewTicker(50 * time.Millisecond)
-		defer ticker.Stop()
-		for {
+		if !*res.Result.VerifyResult {
 			select {
-			case <-ctx.Done():
-				return
-			case <-ticker.C:
-				if el, err := page.Element("#aliyunCaptcha-sliding-slider"); err == nil {
-					// 必须确保 Visible 为 true
-					if v, _ := el.Visible(); v {
-						// 1. 发出停止点击信号 (只发一次，避免 panic)
-						stopClickingOnce.Do(func() {
-							close(stopClicking)
-						})
-
-						// 2. 发送滑块对象
-						select {
-						case sliderElCh <- el:
-						default:
-						}
-					}
-				}
+			case verifyResultCh <- "":
+			default:
 			}
 		}
-	}()
+	})
 
-	// --- 4. 验证循环 ---
-	for !verifySuccess {
+	go router.Run()
+
+	// --- 打开页面：只等 DOMContentLoaded 即可（不等图片等资源）---
+	if err := navigateCaptchaPage(page, makeTargetURL(1)); err != nil {
+		return "", fmt.Errorf("打开页面失败: %v", err)
+	}
+	pageSceneID = extractSceneID(page)
+
+	// --- 验证循环 ---
+	for tryCount := 1; !verifySuccess; tryCount++ {
 		select {
 		case <-ctx.Done():
-			return "", errors.New("验证流程超时")
+			if lastErr != nil {
+				return "", lastErr
+			}
+			return "", errors.New("验证码流程超时")
 		default:
 		}
 
-		retryCount++
-		fmt.Printf("⏳ [第%d次] 等待...\n", retryCount)
-
-		var sliderEl *rod.Element
-		var apiX float64
-
-		gotSlider := false
-		gotApiX := false
-
-	loopWait:
-		for !gotSlider || !gotApiX {
-			select {
-			case sliderEl = <-sliderElCh:
-				if !gotSlider {
-					gotSlider = true
-				}
-			case apiX = <-apiXCh:
-				gotApiX = true
-			case <-ctx.Done():
-				return "", errors.New("等待资源超时")
+		// 验证失败后需要“换一张新图”再滑动：每次重试都重新加载页面，确保 back/shadow 会重新请求。
+		resetState()
+		if tryCount > 1 {
+			if err := navigateCaptchaPage(page, makeTargetURL(tryCount)); err != nil {
+				lastErr = err
+				continue
 			}
-
-			if gotSlider && gotApiX {
-				break loopWait
-			}
+			pageSceneID = extractSceneID(page)
 		}
 
-		// 计算目标距离
-		offset := (rand.Float64()*0.2 - 0.1)
-		finalDistance := apiX + SlideOffset + offset
-		fmt.Printf("🧮 目标距离: %.2f\n", finalDistance)
+		// 1) 点击按钮打开验证码（Rod 内置等待机制）。
+		if err := clickCaptchaButton(page); err != nil {
+			lastErr = err
+			continue
+		}
 
-		// 获取起点
-		box := sliderEl.MustShape().Box()
+		// 2) 等待滑块出现。
+		sliderEl, err := page.Timeout(15 * time.Second).Element("#aliyunCaptcha-sliding-slider")
+		if err != nil {
+			lastErr = err
+			continue
+		}
+		if err := rod.Try(func() { sliderEl.Timeout(15 * time.Second).MustWaitVisible() }); err != nil {
+			lastErr = err
+			continue
+		}
+
+		// 3) 等待打码结果。
+		var apiX float64
+		select {
+		case apiX = <-apiXCh:
+		case <-time.After(25 * time.Second):
+			lastErr = errors.New("等待打码结果超时")
+			continue
+		case <-ctx.Done():
+			return "", errors.New("等待打码结果超时")
+		}
+
+		offset := (rand.Float64() * 0.2) - 0.1
+		finalDistance := apiX + SlideOffset + offset
+
+		// 获取起点（滑块中心点）。
+		shape, err := sliderEl.Shape()
+		if err != nil || shape == nil || shape.Box() == nil {
+			lastErr = errors.New("获取滑块坐标失败")
+			continue
+		}
+		box := shape.Box()
 		startX := box.X + box.Width/2
 		startY := box.Y + box.Height/2
 
-		// 1. 按下滑块
+		// 按下滑块。
 		page.Mouse.MustMoveTo(startX, startY)
 		time.Sleep(time.Duration(100+rand.Intn(50)) * time.Millisecond)
 		page.Mouse.MustDown(proto.InputMouseButtonLeft)
 		time.Sleep(time.Duration(50+rand.Intn(50)) * time.Millisecond)
 
-		// -----------------------------------------------------------
-		// 2. 自适应滑动策略 (高精度版 - 容差 0.8)
-		// -----------------------------------------------------------
-		fmt.Println("🔄 开始自适应滑动策略...")
-
-		// 定义获取滑块当前位置的函数
 		getPuzzlePos := func() float64 {
 			res, _ := page.Eval(`() => {
 				let el = document.querySelector('#aliyunCaptcha-puzzle');
 				if (!el) return -1;
-				// 兼容 left 和 transform 两种位移方式
 				let left = parseFloat(el.style.left) || 0;
 				if (left === 0) {
 					let transform = el.style.transform;
@@ -449,118 +635,78 @@ func SolveAliyunCaptchaWithContext(parent context.Context, timestamp int64, drac
 			return res.Value.Num()
 		}
 
-		// 初始滑动 (先滑到理论位置)
+		// 先移动到理论位置，再做自适应微调。
 		currentMouseX := startX + finalDistance
-
-		// 简单移动到初步位置
 		page.Mouse.MustMoveTo(currentMouseX, startY)
-		time.Sleep(time.Duration(200) * time.Millisecond)
+		time.Sleep(200 * time.Millisecond)
 
-		// 定义目标位置和参数
 		targetPuzzlePos := finalDistance
-
-		// 【修改点1】将容差收紧到 0.8，确保误差在 1px 以内
 		tolerance := 1.0
-		maxAttempts := 30 // 增加尝试次数，因为高精度需要更多微调
+		maxAttempts := 30
 		success := false
 
-		attempt := 0
-		for ; attempt < maxAttempts; attempt++ {
+		for attempt := 0; attempt < maxAttempts; attempt++ {
 			currentPos := getPuzzlePos()
 			diff := targetPuzzlePos - currentPos
-
-			fmt.Printf("🔍 第%d次调整: 滑块位置=%.2f, 目标=%.2f, 差异=%.2f\n", attempt+1, currentPos, targetPuzzlePos, diff)
-
-			// 检查是否在容差范围内
 			if math.Abs(diff) <= tolerance {
-				fmt.Println("✅ 已达到目标位置，停止调整")
 				success = true
 				break
 			}
 
-			// --- 核心修正逻辑 ---
-
 			dampingFactor := 0.5
-
-			// 【修改点2】动态阻尼策略优化
-			// 距离大时保守(0.5)，距离近时稍微激进一点(0.9)，确保能推进最后 1px
 			absDiff := math.Abs(diff)
 			if absDiff < 3 {
-				// 距离非常近，几乎按 1:1 移动，否则容易因为移动太小被忽略
 				dampingFactor = 0.9
 			} else if absDiff < 10 {
 				dampingFactor = 0.7
-			} else {
-				dampingFactor = 0.5
 			}
 
 			moveStep := diff * dampingFactor
-
-			// 限制单次最大修正幅度
 			if moveStep > 30 {
 				moveStep = 30
 			} else if moveStep < -30 {
 				moveStep = -30
 			}
-
 			currentMouseX += moveStep
 
-			// 添加微小的随机 Y 轴抖动
 			randomY := startY + (rand.Float64()*2 - 1)
-
-			fmt.Printf("🎯 修正鼠标: 步长=%.2f, 新鼠标X=%.2f\n", moveStep, currentMouseX)
-
-			// 执行移动
 			page.Mouse.MustMoveTo(currentMouseX, randomY)
-
-			// 必须有足够的停顿让页面 JS 响应动画
 			time.Sleep(time.Duration(150+rand.Intn(100)) * time.Millisecond)
 		}
 
-		// 最终位置检查
-		finalPos := getPuzzlePos()
-		fmt.Printf("🏁 最终滑块位置: %.2f, 目标: %.2f, 最终差异: %.2f\n", finalPos, targetPuzzlePos, finalPos-targetPuzzlePos)
-
-		if success {
-			fmt.Println("🎉 调整成功！")
-		} else {
-			fmt.Printf("⚠️ 调整超时，已尝试%d次\n", attempt)
-		}
-		// 4. 停顿后松开滑块
+		// 松开滑块。
+		_ = success
 		time.Sleep(time.Duration(300+rand.Intn(200)) * time.Millisecond)
 		page.Mouse.MustUp(proto.InputMouseButtonLeft)
 
-		// 等待结果
+		// 等待验证结果（由接口回包触发）。
 		select {
 		case resStr := <-verifyResultCh:
 			if resStr != "" {
 				verifySuccess = true
 				finalResult = resStr
-				// 打印最终的JSON结构，方便调试
-				fmt.Println("📋 最终验证码结果JSON:")
-				fmt.Println(finalResult)
-			} else {
-				fmt.Println("❌ 验证失败，重置状态...")
-				resetState()
-				time.Sleep(1 * time.Second)
+				break
 			}
-		case <-time.After(5 * time.Second):
-			fmt.Println("⚠️ 结果等待超时，重置...")
-			resetState()
-			time.Sleep(1 * time.Second)
+			lastErr = errors.New("验证失败")
+			time.Sleep(800 * time.Millisecond)
+		case <-time.After(6 * time.Second):
+			lastErr = errors.New("等待验证结果超时")
+			time.Sleep(800 * time.Millisecond)
 		case <-ctx.Done():
-			return "", errors.New("验证等待超时")
+			return "", errors.New("等待验证结果超时")
 		}
 	}
 
 	if verifySuccess {
 		return finalResult, nil
 	}
-
-	return "", errResult
+	if lastErr != nil {
+		return "", lastErr
+	}
+	return "", errors.New("验证码验证失败")
 }
 
-// 生成贝塞尔曲线轨迹
+// 生成贝塞尔曲线轨迹。
 func generateBezierTrack(startX, startY, endX, endY float64, steps int) []Point {
 	var track []Point
 
@@ -587,7 +733,7 @@ func generateBezierTrack(startX, startY, endX, endY float64, steps int) []Point 
 	return track
 }
 
-// 执行轨迹移动
+// 执行轨迹移动。
 func executeTrack(page *rod.Page, track []Point) {
 	for _, p := range track {
 		page.Mouse.MustMoveTo(p.X, p.Y)

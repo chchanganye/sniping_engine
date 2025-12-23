@@ -57,6 +57,9 @@ func main() {
 	}
 
 	utils.SetCaptchaMaxConcurrent(cfg.Limits.CaptchaMaxInFlight)
+	if err := utils.WarmupCaptchaBrowser(); err != nil {
+		bus.Log("warn", "验证码浏览器预热失败", map[string]any{"error": err.Error()})
+	}
 
 	prov := standard.New(cfg.Provider, cfg.Proxy, bus)
 	emailNotifier := notify.NewEmailNotifier(store, bus)
@@ -117,6 +120,7 @@ func main() {
 	_ = eng.StopAll(shutdownCtx)
 	_ = emailNotifier.Close(shutdownCtx)
 	_ = server.Shutdown(shutdownCtx)
+	_ = utils.CloseCaptchaBrowser()
 	bus.Log("info", "服务已停止", nil)
 }
 
@@ -162,7 +166,7 @@ func startConsoleLogger(bus *logbus.Bus) func() {
 
 	return func() {
 		cancel()
-	<-done
+		<-done
 	}
 }
 
