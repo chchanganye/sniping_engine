@@ -77,6 +77,22 @@ function friendlyLogMessage(msg: string, fields?: Record<string, any>) {
   if (m === 'target waiting for rush time') return '等待开抢时间…'
   if (m === 'preflight: canBuy=false') return '预下单结果：当前不可购买'
 
+  if (m === 'captcha engine starting') return '验证码引擎状态：启动中'
+  if (m === 'captcha engine ready') return `验证码引擎状态：已就绪（预热页：${String(fields?.warmPages ?? '-')}，池：${String(fields?.pagePoolSize ?? '-')}）`
+  if (m === 'captcha engine warmup failed') return `验证码引擎状态：启动失败（${normalizeErrorText(String(fields?.error ?? '')) || '未知错误'}）`
+
+  if (m === 'captcha solved') {
+    const attempts = fields?.attempts != null ? String(fields.attempts) : '-'
+    const sec = fields?.costSec != null ? String(fields.costSec) : fields?.costMs != null ? String(Number(fields.costMs) / 1000) : '-'
+    return `验证码通过：尝试${attempts}次，总耗时${sec}秒${formatIds(fields)}`
+  }
+  if (m === 'captcha solve failed') {
+    const attempts = fields?.attempts != null ? String(fields.attempts) : '-'
+    const sec = fields?.costSec != null ? String(fields.costSec) : fields?.costMs != null ? String(Number(fields.costMs) / 1000) : '-'
+    const reason = normalizeErrorText(String(fields?.error ?? '')) || '未知错误'
+    return `验证码失败：尝试${attempts}次，总耗时${sec}秒，原因：${reason}${formatIds(fields)}`
+  }
+
   if (m === 'http request') return `正在发送网络请求：${summarizeRequest(fields) || '请求中…'}`
   if (m === 'proxy request') return `正在代理请求：${summarizeRequest(fields) || '请求中…'}`
 

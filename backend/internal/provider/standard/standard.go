@@ -249,11 +249,9 @@ func (p *StandardProvider) CreateOrder(ctx context.Context, account model.Accoun
 	}
 
 	captchaVerifyParam := strings.TrimSpace(target.CaptchaVerifyParam)
-	fmt.Printf("DEBUG: target.CaptchaVerifyParam='%s', NeedCaptcha=%v\n", captchaVerifyParam, preflight.NeedCaptcha)
 	if preflight.NeedCaptcha {
 		if captchaVerifyParam == "" {
 			// 需要验证码但没有提供，调用验证码解决方法
-			fmt.Println("DEBUG: invoking utils.SolveAliyunCaptcha...")
 			timestamp := time.Now().UnixMilli()
 			// 从cookie中提取dracoToken
 			dracoToken := ""
@@ -269,13 +267,33 @@ func (p *StandardProvider) CreateOrder(ctx context.Context, account model.Accoun
 				}
 			}
 
-			// 调用验证码解决方法
-			captchaVerifyParam, err = utils.SolveAliyunCaptchaWithContext(ctx, timestamp, dracoToken)
+			// 调用验证码解决方法（带统计数据）
+			var metrics utils.CaptchaSolveMetrics
+			captchaVerifyParam, metrics, err = utils.SolveAliyunCaptchaWithMetrics(ctx, timestamp, dracoToken)
 			if err != nil {
+				if p.bus != nil {
+					p.bus.Log("warn", "captcha solve failed", map[string]any{
+						"accountId": account.ID,
+						"targetId":  target.ID,
+						"attempts":  metrics.Attempts,
+						"costMs":    metrics.Duration.Milliseconds(),
+						"costSec":   fmt.Sprintf("%.2f", metrics.Duration.Seconds()),
+						"error":     err.Error(),
+					})
+				}
 				return provider.CreateResult{}, model.Account{}, fmt.Errorf("failed to solve captcha: %v", err)
 			}
 			if captchaVerifyParam == "" {
 				return provider.CreateResult{}, model.Account{}, errors.New("captcha solving returned empty result")
+			}
+			if p.bus != nil {
+				p.bus.Log("info", "captcha solved", map[string]any{
+					"accountId": account.ID,
+					"targetId":  target.ID,
+					"attempts":  metrics.Attempts,
+					"costMs":    metrics.Duration.Milliseconds(),
+					"costSec":   fmt.Sprintf("%.2f", metrics.Duration.Seconds()),
+				})
 			}
 		}
 	} else {

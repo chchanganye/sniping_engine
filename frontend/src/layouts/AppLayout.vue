@@ -6,6 +6,7 @@ import { storeToRefs } from 'pinia'
 import { useAccountsStore } from '@/stores/accounts'
 import { useTasksStore } from '@/stores/tasks'
 import { useLogsStore } from '@/stores/logs'
+import { useCaptchaEngineStore } from '@/stores/captcha_engine'
 
 const isCollapsed = ref(false)
 const route = useRoute()
@@ -13,14 +14,17 @@ const route = useRoute()
 const accountsStore = useAccountsStore()
 const tasksStore = useTasksStore()
 const logsStore = useLogsStore()
+const captchaEngineStore = useCaptchaEngineStore()
 
 const { summary: accountSummary } = storeToRefs(accountsStore)
 const { summary: taskSummary, engineRunning } = storeToRefs(tasksStore)
+const { state: captchaState } = storeToRefs(captchaEngineStore)
 
 onMounted(() => {
   void accountsStore.ensureLoaded()
   void tasksStore.ensureLoaded()
   logsStore.connect()
+  captchaEngineStore.startPolling()
 })
 
 const pageTitle = computed(() => route.meta.title ?? '控制台')
@@ -72,6 +76,9 @@ const menuItems = [
             <el-tag type="success" effect="light">Token：{{ accountSummary.loggedIn }}</el-tag>
             <el-tag :type="engineRunning ? 'success' : 'info'" effect="light">
               引擎：{{ engineRunning ? '运行中' : '未运行' }}
+            </el-tag>
+            <el-tag :type="captchaState === 'ready' ? 'success' : captchaState === 'error' ? 'danger' : 'info'" effect="light">
+              验证码引擎状态：{{ captchaState === 'ready' ? '已就绪' : captchaState === 'starting' ? '启动中' : captchaState === 'error' ? '异常' : '未知' }}
             </el-tag>
             <el-tag type="info" effect="light">任务：{{ taskSummary.total }}</el-tag>
             <el-tag type="warning" effect="light">运行/排队：{{ taskSummary.running }}</el-tag>

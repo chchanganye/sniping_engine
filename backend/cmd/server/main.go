@@ -57,9 +57,19 @@ func main() {
 	}
 
 	utils.SetCaptchaMaxConcurrent(cfg.Limits.CaptchaMaxInFlight)
-	if err := utils.WarmupCaptchaBrowser(); err != nil {
-		bus.Log("warn", "验证码浏览器预热失败", map[string]any{"error": err.Error()})
-	}
+	utils.SetCaptchaEngineState(utils.CaptchaEngineStateStarting, "", 0)
+	go func() {
+		bus.Log("info", "captcha engine starting", map[string]any{"warmPages": cfg.Limits.CaptchaMaxInFlight})
+		if err := utils.WarmupCaptchaEngine(cfg.Limits.CaptchaMaxInFlight); err != nil {
+			bus.Log("error", "captcha engine warmup failed", map[string]any{"error": err.Error()})
+			return
+		}
+		status := utils.GetCaptchaEngineStatus()
+		bus.Log("info", "captcha engine ready", map[string]any{
+			"warmPages":    status.WarmPages,
+			"pagePoolSize": status.PagePoolSize,
+		})
+	}()
 
 	prov := standard.New(cfg.Provider, cfg.Proxy, bus)
 	emailNotifier := notify.NewEmailNotifier(store, bus)

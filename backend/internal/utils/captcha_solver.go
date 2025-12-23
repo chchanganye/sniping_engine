@@ -13,9 +13,11 @@ import (
 	"net"
 	"net/http"
 	"os"
+	"runtime"
 	"strconv"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/go-rod/rod"
@@ -30,6 +32,35 @@ var (
 	captchaSemaphoreMu sync.RWMutex
 	captchaSemaphore   = make(chan struct{}, 1)
 )
+
+type CaptchaEngineState string
+
+const (
+	CaptchaEngineStateStopped  CaptchaEngineState = "stopped"
+	CaptchaEngineStateStarting CaptchaEngineState = "starting"
+	CaptchaEngineStateReady    CaptchaEngineState = "ready"
+	CaptchaEngineStateError    CaptchaEngineState = "error"
+)
+
+type CaptchaEngineStatus struct {
+	State         CaptchaEngineState `json:"state"`
+	StartedAtMs   int64              `json:"startedAtMs"`
+	ReadyAtMs     int64              `json:"readyAtMs"`
+	LastError     string             `json:"lastError,omitempty"`
+	WarmPages     int                `json:"warmPages"`
+	PagePoolSize  int                `json:"pagePoolSize"`
+	SolveCount    int64              `json:"solveCount"`
+	TotalSolveMs  int64              `json:"totalSolveMs"`
+	LastSolveAtMs int64              `json:"lastSolveAtMs"`
+	LastSolveMs   int64              `json:"lastSolveMs"`
+	LastAttempts  int64              `json:"lastAttempts"`
+	GoRoutines    int                `json:"goRoutines"`
+}
+
+type CaptchaSolveMetrics struct {
+	Attempts int           `json:"attempts"`
+	Duration time.Duration `json:"duration"`
+}
 
 // SetCaptchaMaxConcurrent 设置验证码求解（无头浏览器）的并发数上限。
 // n <= 0 时会自动按 1 处理。
@@ -67,10 +98,18 @@ const (
 
 	// 滑动偏移量（如需要可调）。
 	SlideOffset = 0.0
-
-	// 无头模式开关：false 表示显示浏览器窗口（方便调试），true 表示无头模式（生产环境使用）。
-	HeadlessMode = true
 )
+
+// 无头模式开关：默认 true（生产环境）。
+// 如需本地调试打开浏览器窗口，可设置环境变量：SNIPING_ENGINE_CAPTCHA_HEADLESS=0
+var HeadlessMode = func() bool {
+	v := strings.TrimSpace(os.Getenv("SNIPING_ENGINE_CAPTCHA_HEADLESS"))
+	if v == "" {
+		return true
+	}
+	v = strings.ToLower(v)
+	return !(v == "0" || v == "false" || v == "no" || v == "off")
+}()
 
 type solveRequest struct {
 	SlideImage      string `json:"slide_image"`
@@ -120,7 +159,88 @@ var (
 
 	// 复用 HTTP Client，利用 Keep-Alive 连接池，减少 TCP/TLS 握手开销。
 	captchaHTTPClient = newCaptchaHTTPClient()
+
+	captchaSleepScaleOnce sync.Once
+	captchaSleepScaleVal  float64
+
+	captchaPagePoolMu sync.Mutex
+	captchaPagePool   []*captchaPage
+
+	captchaEngineMu      sync.RWMutex
+	captchaEngineState   CaptchaEngineState = CaptchaEngineStateStopped
+	captchaEngineStarted int64
+	captchaEngineReadyAt int64
+	captchaEngineErr     string
+	captchaEngineWarm    int
+
+	captchaSolveCount    atomic.Int64
+	captchaSolveTotalMs  atomic.Int64
+	captchaLastSolveAtMs atomic.Int64
+	captchaLastSolveMs   atomic.Int64
+	captchaLastAttempts  atomic.Int64
 )
+
+type captchaPage struct {
+	incognito *rod.Browser
+	page      *rod.Page
+}
+
+func SetCaptchaEngineState(state CaptchaEngineState, errText string, warmPages int) {
+	now := time.Now().UnixMilli()
+
+	captchaEngineMu.Lock()
+	defer captchaEngineMu.Unlock()
+
+	if state == CaptchaEngineStateStarting {
+		captchaEngineStarted = now
+		captchaEngineReadyAt = 0
+	}
+	if state == CaptchaEngineStateReady {
+		if captchaEngineStarted == 0 {
+			captchaEngineStarted = now
+		}
+		captchaEngineReadyAt = now
+	}
+	if state == CaptchaEngineStateError {
+		if captchaEngineStarted == 0 {
+			captchaEngineStarted = now
+		}
+	}
+	captchaEngineState = state
+	captchaEngineErr = strings.TrimSpace(errText)
+	if warmPages > 0 {
+		captchaEngineWarm = warmPages
+	}
+}
+
+func GetCaptchaEngineStatus() CaptchaEngineStatus {
+	captchaPagePoolMu.Lock()
+	poolSize := len(captchaPagePool)
+	captchaPagePoolMu.Unlock()
+
+	captchaEngineMu.RLock()
+	state := captchaEngineState
+	startedAt := captchaEngineStarted
+	readyAt := captchaEngineReadyAt
+	lastErr := captchaEngineErr
+	warm := captchaEngineWarm
+	captchaEngineMu.RUnlock()
+
+	return CaptchaEngineStatus{
+		State:         state,
+		StartedAtMs:   startedAt,
+		ReadyAtMs:     readyAt,
+		LastError:     lastErr,
+		WarmPages:     warm,
+		PagePoolSize:  poolSize,
+		SolveCount:    captchaSolveCount.Load(),
+		TotalSolveMs:  captchaSolveTotalMs.Load(),
+		LastSolveAtMs: captchaLastSolveAtMs.Load(),
+		LastSolveMs:   captchaLastSolveMs.Load(),
+		LastAttempts:  captchaLastAttempts.Load(),
+		GoRoutines:    runtime.NumGoroutine(),
+	}
+}
 
 // WarmupCaptchaBrowser 预热验证码浏览器（可选）。
 // 不调用也没关系，首次 SolveAliyunCaptcha 时会自动初始化。
@@ -129,12 +249,69 @@ func WarmupCaptchaBrowser() error {
 	return err
 }
 
+// WarmupCaptchaEngine 启动并预热验证码引擎：
+// - 启动全局浏览器
+// - 预创建一定数量的页面放入池中（减少首次使用延迟）
+func WarmupCaptchaEngine(maxWarmPages int) error {
+	// warmPages 默认跟随配置的并发上限，但要限制一个合理的上限，避免占用太多资源。
+	warmPages := maxWarmPages
+	if warmPages <= 0 {
+		warmPages = 1
+	}
+	if warmPages > 6 {
+		warmPages = 6
+	}
+	if v := strings.TrimSpace(os.Getenv("SNIPING_ENGINE_CAPTCHA_WARM_PAGES")); v != "" {
+		if n, err := strconv.Atoi(v); err == nil && n > 0 && n <= 8 {
+			warmPages = n
+		}
+	}
+
+	SetCaptchaEngineState(CaptchaEngineStateStarting, "", warmPages)
+
+	if err := WarmupCaptchaBrowser(); err != nil {
+		SetCaptchaEngineState(CaptchaEngineStateError, err.Error(), warmPages)
+		return err
+	}
+
+	// 预热页面池：创建 warmPages 个页面并归还到池里。
+	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
+	defer cancel()
+
+	for i := 0; i < warmPages; i++ {
+		cp, _, err := acquireCaptchaPage(ctx)
+		if err != nil {
+			SetCaptchaEngineState(CaptchaEngineStateError, err.Error(), warmPages)
+			return err
+		}
+		releaseCaptchaPage(cp)
+	}
+
+	SetCaptchaEngineState(CaptchaEngineStateReady, "", warmPages)
+	return nil
+}
+
 // CloseCaptchaBrowser 关闭全局验证码浏览器（通常在进程退出时调用）。
 func CloseCaptchaBrowser() error {
 	captchaBrowserMu.Lock()
 	defer captchaBrowserMu.Unlock()
 
 	var firstErr error
+	captchaPagePoolMu.Lock()
+	for _, p := range captchaPagePool {
+		if p == nil {
+			continue
+		}
+		if p.page != nil {
+			_ = p.page.Close()
+		}
+		if p.incognito != nil {
+			_ = p.incognito.Close()
+		}
+	}
+	captchaPagePool = nil
+	captchaPagePoolMu.Unlock()
+
 	if captchaBrowser != nil {
 		if err := captchaBrowser.Close(); err != nil && firstErr == nil {
 			firstErr = err
@@ -194,6 +371,40 @@ func newCaptchaHTTPClient() *http.Client {
 	}
 }
 
+func captchaSleepScale() float64 {
+	captchaSleepScaleOnce.Do(func() {
+		// 默认 1.0；设置 SNIPING_ENGINE_CAPTCHA_FAST=1 则会更快（更短等待）。
+		captchaSleepScaleVal = 1.0
+
+		fast := strings.EqualFold(strings.TrimSpace(os.Getenv("SNIPING_ENGINE_CAPTCHA_FAST")), "1") ||
+			strings.EqualFold(strings.TrimSpace(os.Getenv("SNIPING_ENGINE_CAPTCHA_FAST")), "true")
+		if fast {
+			captchaSleepScaleVal = 0.35
+		}
+
+		if v := strings.TrimSpace(os.Getenv("SNIPING_ENGINE_CAPTCHA_SLEEP_SCALE")); v != "" {
+			if f, err := strconv.ParseFloat(v, 64); err == nil && f > 0 && f <= 1.0 {
+				captchaSleepScaleVal = f
+			}
+		}
+	})
+	return captchaSleepScaleVal
+}
+
+func captchaSleep(base time.Duration, jitter time.Duration) {
+	d := base
+	if jitter > 0 {
+		d += time.Duration(rand.Int63n(int64(jitter) + 1))
+	}
+	scale := captchaSleepScale()
+	if scale > 0 && scale < 1 {
+		d = time.Duration(float64(d) * scale)
+	}
+	if d > 0 {
+		time.Sleep(d)
+	}
+}
+
 func drainFloat64Chan(ch chan float64) {
 	for {
 		select {
@@ -212,6 +423,59 @@ func drainStringChan(ch chan string) {
 			return
 		}
 	}
+}
+
+func acquireCaptchaPage(ctx context.Context) (*captchaPage, *rod.Page, error) {
+	captchaPagePoolMu.Lock()
+	n := len(captchaPagePool)
+	if n > 0 {
+		cp := captchaPagePool[n-1]
+		captchaPagePool = captchaPagePool[:n-1]
+		captchaPagePoolMu.Unlock()
+		if cp != nil && cp.page != nil {
+			return cp, cp.page.Context(ctx), nil
+		}
+	} else {
+		captchaPagePoolMu.Unlock()
+	}
+
+	mainBrowser, err := getCaptchaBrowser()
+	if err != nil {
+		return nil, nil, err
+	}
+
+	incognito, err := mainBrowser.Incognito()
+	if err != nil {
+		return nil, nil, err
+	}
+
+	var page *rod.Page
+	if err := rod.Try(func() {
+		page = stealth.MustPage(incognito)
+		page.MustEmulate(devices.IPhoneX)
+	}); err != nil {
+		_ = incognito.Close()
+		return nil, nil, err
+	}
+
+	cp := &captchaPage{incognito: incognito, page: page}
+	return cp, page.Context(ctx), nil
+}
+
+func releaseCaptchaPage(cp *captchaPage) {
+	if cp == nil || cp.page == nil {
+		return
+	}
+
+	// 复用页面时做最小清理，避免下次复用落在上一次的页面状态里。
+	_ = rod.Try(func() {
+		p := cp.page.Context(context.Background()).Timeout(2 * time.Second)
+		_ = p.Navigate("about:blank")
+	})
+
+	captchaPagePoolMu.Lock()
+	captchaPagePool = append(captchaPagePool, cp)
+	captchaPagePoolMu.Unlock()
 }
 
 func clickCaptchaButton(page *rod.Page) error {
@@ -241,13 +505,13 @@ func clickCaptchaButton(page *rod.Page) error {
 			if isSliderReady(p) {
 				return true
 			}
-			time.Sleep(120 * time.Millisecond)
+			captchaSleep(80*time.Millisecond, 0)
 		}
 		return false
 	}
 
 	clickByID := func(p *rod.Page) bool {
-		res, err := p.Timeout(2 * time.Second).Eval(`() => {
+		res, err := p.Timeout(300 * time.Millisecond).Eval(`() => {
 			const btn = document.getElementById('button');
 			if (!btn) return false;
 			try { btn.scrollIntoView({block: 'center', inline: 'center'}); } catch (e) {}
@@ -261,31 +525,51 @@ func clickCaptchaButton(page *rod.Page) error {
 		return nil
 	}
 
-	// 根据你提供的结构：固定使用 #button（安全验证）即可，避免过度兼容带来不稳定。
-	btn, err := page.Timeout(6 * time.Second).Element("#button")
-	if err == nil {
-		_ = rod.Try(func() {
-			btn.Timeout(3 * time.Second).MustWaitVisible()
-			_ = btn.ScrollIntoView()
-			btn.MustClick()
-		})
-		debugf("已尝试点击：Rod 点击（#button）")
-		if waitSliderReady(page, 6*time.Second) {
-			debugf("已进入滑块阶段：Rod 点击（#button）")
+	// “按钮出现就立刻点”：不要长时间等待 MustWaitVisible，否则会感觉有延迟。
+	// 这里采用短间隔循环：能点就点，点完快速检查滑块是否出现；没出现就继续点直到超时。
+	deadline := time.Now().Add(6 * time.Second)
+	for time.Now().Before(deadline) {
+		if isSliderReady(page) {
 			return nil
 		}
-	}
 
-	// 兜底：Rod 点击不生效时用 JS click()
-	if clickByID(page) {
-		debugf("已尝试点击：JS 点击（document.getElementById('button').click()）")
-		if waitSliderReady(page, 6*time.Second) {
-			debugf("已进入滑块阶段：JS 点击（document.getElementById('button').click()）")
-			return nil
+		clicked := false
+
+		// 先用 JS 点击（最快，不依赖鼠标坐标/可见性等待）。
+		if clickByID(page) {
+			clicked = true
+			debugf("已尝试点击：JS 点击（#button）")
+			if waitSliderReady(page, 900*time.Millisecond) {
+				debugf("已进入滑块阶段：JS 点击（#button）")
+				return nil
+			}
 		}
+
+		// 再用 Rod 点击（有些页面会过滤纯 JS click，这里兜底一下）。
+		if el, err := page.Timeout(200 * time.Millisecond).Element("#button"); err == nil {
+			_ = rod.Try(func() {
+				_ = el.ScrollIntoView()
+				el.MustClick()
+			})
+			clicked = true
+			debugf("已尝试点击：Rod 点击（#button）")
+			if waitSliderReady(page, 900*time.Millisecond) {
+				debugf("已进入滑块阶段：Rod 点击（#button）")
+				return nil
+			}
+		}
+
+		if !clicked {
+			// 按钮还没出现在 DOM 里，短暂等待即可。
+			captchaSleep(60*time.Millisecond, 20*time.Millisecond)
+			continue
+		}
+
+		// 已点过但还没进入滑块阶段：稍微等待一下再继续下一轮点击。
+		captchaSleep(120*time.Millisecond, 40*time.Millisecond)
 	}
 
-	return errors.New("点击“安全验证”后未进入滑块阶段")
+	return errors.New("未能自动点击“安全验证”按钮（或点击后未进入滑块阶段）")
 }
 
 func extractSceneID(page *rod.Page) string {
@@ -317,16 +601,27 @@ func SolveAliyunCaptcha(timestamp int64, dracoToken string) (string, error) {
 	return SolveAliyunCaptchaWithContext(context.Background(), timestamp, dracoToken)
 }
 
+func SolveAliyunCaptchaWithMetrics(parent context.Context, timestamp int64, dracoToken string) (string, CaptchaSolveMetrics, error) {
+	return solveAliyunCaptchaWithMetrics(parent, timestamp, dracoToken)
+}
+
 // SolveAliyunCaptchaWithContext 执行验证码验证并返回 Base64 编码的结果（支持 ctx 取消）。
 func SolveAliyunCaptchaWithContext(parent context.Context, timestamp int64, dracoToken string) (string, error) {
+	result, _, err := solveAliyunCaptchaWithMetrics(parent, timestamp, dracoToken)
+	return result, err
+}
+
+func solveAliyunCaptchaWithMetrics(parent context.Context, timestamp int64, dracoToken string) (string, CaptchaSolveMetrics, error) {
 	rand.Seed(time.Now().UnixNano())
+	started := time.Now()
+	metrics := CaptchaSolveMetrics{Attempts: 0, Duration: 0}
 
 	ctx, cancel := context.WithTimeout(parent, 360*time.Second)
 	defer cancel()
 
 	release, err := acquireCaptchaSlot(ctx)
 	if err != nil {
-		return "", err
+		return "", metrics, err
 	}
 	defer release()
 
@@ -339,25 +634,11 @@ func SolveAliyunCaptchaWithContext(parent context.Context, timestamp int64, drac
 		return fmt.Sprintf("https://m.4008117117.com/aliyun-captcha?t=%d&cookie=true&draco_local=%s&r=%d", t, dracoToken, rand.Int63())
 	}
 
-	mainBrowser, err := getCaptchaBrowser()
+	cp, page, err := acquireCaptchaPage(ctx)
 	if err != nil {
-		return "", err
+		return "", metrics, err
 	}
-
-	incognito, err := mainBrowser.Incognito()
-	if err != nil {
-		return "", err
-	}
-	defer func() { _ = incognito.Close() }()
-
-	var page *rod.Page
-	if err := rod.Try(func() {
-		page = stealth.MustPage(incognito).Context(ctx)
-		page.MustEmulate(devices.IPhoneX)
-	}); err != nil {
-		return "", err
-	}
-	defer func() { _ = page.Close() }()
+	defer releaseCaptchaPage(cp)
 
 	// --- 状态 ---
 	var (
@@ -548,18 +829,22 @@ func SolveAliyunCaptchaWithContext(parent context.Context, timestamp int64, drac
 
 	// --- 打开页面：只等 DOMContentLoaded 即可（不等图片等资源）---
 	if err := navigateCaptchaPage(page, makeTargetURL(1)); err != nil {
-		return "", fmt.Errorf("打开页面失败: %v", err)
+		metrics.Duration = time.Since(started)
+		return "", metrics, fmt.Errorf("打开页面失败: %v", err)
 	}
 	pageSceneID = extractSceneID(page)
 
 	// --- 验证循环 ---
 	for tryCount := 1; !verifySuccess; tryCount++ {
+		metrics.Attempts = tryCount
 		select {
 		case <-ctx.Done():
 			if lastErr != nil {
-				return "", lastErr
+				metrics.Duration = time.Since(started)
+				return "", metrics, lastErr
 			}
-			return "", errors.New("验证码流程超时")
+			metrics.Duration = time.Since(started)
+			return "", metrics, errors.New("验证码流程超时")
 		default:
 		}
 
@@ -598,7 +883,8 @@ func SolveAliyunCaptchaWithContext(parent context.Context, timestamp int64, drac
 			lastErr = errors.New("等待打码结果超时")
 			continue
 		case <-ctx.Done():
-			return "", errors.New("等待打码结果超时")
+			metrics.Duration = time.Since(started)
+			return "", metrics, errors.New("等待打码结果超时")
 		}
 
 		offset := (rand.Float64() * 0.2) - 0.1
@@ -616,9 +902,9 @@ func SolveAliyunCaptchaWithContext(parent context.Context, timestamp int64, drac
 
 		// 按下滑块。
 		page.Mouse.MustMoveTo(startX, startY)
-		time.Sleep(time.Duration(100+rand.Intn(50)) * time.Millisecond)
+		captchaSleep(60*time.Millisecond, 20*time.Millisecond)
 		page.Mouse.MustDown(proto.InputMouseButtonLeft)
-		time.Sleep(time.Duration(50+rand.Intn(50)) * time.Millisecond)
+		captchaSleep(30*time.Millisecond, 20*time.Millisecond)
 
 		getPuzzlePos := func() float64 {
 			res, _ := page.Eval(`() => {
@@ -638,7 +924,7 @@ func SolveAliyunCaptchaWithContext(parent context.Context, timestamp int64, drac
 		// 先移动到理论位置，再做自适应微调。
 		currentMouseX := startX + finalDistance
 		page.Mouse.MustMoveTo(currentMouseX, startY)
-		time.Sleep(200 * time.Millisecond)
+		captchaSleep(120*time.Millisecond, 40*time.Millisecond)
 
 		targetPuzzlePos := finalDistance
 		tolerance := 1.0
@@ -671,12 +957,12 @@ func SolveAliyunCaptchaWithContext(parent context.Context, timestamp int64, drac
 
 			randomY := startY + (rand.Float64()*2 - 1)
 			page.Mouse.MustMoveTo(currentMouseX, randomY)
-			time.Sleep(time.Duration(150+rand.Intn(100)) * time.Millisecond)
+			captchaSleep(80*time.Millisecond, 40*time.Millisecond)
 		}
 
 		// 松开滑块。
 		_ = success
-		time.Sleep(time.Duration(300+rand.Intn(200)) * time.Millisecond)
+		captchaSleep(160*time.Millisecond, 80*time.Millisecond)
 		page.Mouse.MustUp(proto.InputMouseButtonLeft)
 
 		// 等待验证结果（由接口回包触发）。
@@ -688,22 +974,31 @@ func SolveAliyunCaptchaWithContext(parent context.Context, timestamp int64, drac
 				break
 			}
 			lastErr = errors.New("验证失败")
-			time.Sleep(800 * time.Millisecond)
+			captchaSleep(350*time.Millisecond, 150*time.Millisecond)
 		case <-time.After(6 * time.Second):
 			lastErr = errors.New("等待验证结果超时")
-			time.Sleep(800 * time.Millisecond)
+			captchaSleep(350*time.Millisecond, 150*time.Millisecond)
 		case <-ctx.Done():
-			return "", errors.New("等待验证结果超时")
+			metrics.Duration = time.Since(started)
+			return "", metrics, errors.New("等待验证结果超时")
 		}
 	}
 
 	if verifySuccess {
-		return finalResult, nil
+		metrics.Duration = time.Since(started)
+		captchaSolveCount.Add(1)
+		captchaSolveTotalMs.Add(metrics.Duration.Milliseconds())
+		captchaLastSolveAtMs.Store(time.Now().UnixMilli())
+		captchaLastSolveMs.Store(metrics.Duration.Milliseconds())
+		captchaLastAttempts.Store(int64(metrics.Attempts))
+		return finalResult, metrics, nil
 	}
 	if lastErr != nil {
-		return "", lastErr
+		metrics.Duration = time.Since(started)
+		return "", metrics, lastErr
 	}
-	return "", errors.New("验证码验证失败")
+	metrics.Duration = time.Since(started)
+	return "", metrics, errors.New("验证码验证失败")
 }
 
 // 生成贝塞尔曲线轨迹。

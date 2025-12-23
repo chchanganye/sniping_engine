@@ -70,6 +70,7 @@ func (s *Server) Handler() http.Handler {
 	api.HandleFunc("/api/v1/engine/state", s.handleEngineState)
 	api.HandleFunc("/api/v1/engine/preflight", s.handleEnginePreflight)
 	api.HandleFunc("/api/v1/engine/test-buy", s.handleEngineTestBuy)
+	api.HandleFunc("/api/v1/captcha/state", s.handleCaptchaState)
 	api.HandleFunc("/api/v1/settings/email", s.handleEmailSettings)
 	api.HandleFunc("/api/v1/settings/email/test", s.handleEmailTest)
 	api.HandleFunc("/api/v1/settings/limits", s.handleLimitsSettings)
@@ -81,6 +82,14 @@ func (s *Server) Handler() http.Handler {
 
 func (s *Server) handleHealth(w http.ResponseWriter, _ *http.Request) {
 	writeJSON(w, http.StatusOK, map[string]any{"ok": true})
+}
+
+func (s *Server) handleCaptchaState(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		writeJSON(w, http.StatusMethodNotAllowed, map[string]any{"error": "method not allowed"})
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"data": utils.GetCaptchaEngineStatus()})
 }
 
 func (s *Server) handleAccounts(w http.ResponseWriter, r *http.Request) {

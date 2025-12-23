@@ -78,6 +78,20 @@ export interface LimitsSettings {
   captchaMaxInFlight: number
 }
 
+export interface CaptchaEngineStatus {
+  state: 'stopped' | 'starting' | 'ready' | 'error'
+  startedAtMs?: number
+  readyAtMs?: number
+  lastError?: string
+  warmPages?: number
+  pagePoolSize?: number
+  solveCount?: number
+  totalSolveMs?: number
+  lastSolveAtMs?: number
+  lastSolveMs?: number
+  lastAttempts?: number
+}
+
 type DataEnvelope<T> = { data: T }
 
 export async function beListAccounts(): Promise<BackendAccount[]> {
@@ -168,6 +182,11 @@ export async function beGetLimitsSettings(): Promise<LimitsSettings> {
 
 export async function beSaveLimitsSettings(payload: Partial<LimitsSettings>): Promise<LimitsSettings> {
   const resp = await http.post<DataEnvelope<LimitsSettings>>('/api/v1/settings/limits', payload)
+  return resp.data.data
+}
+
+export async function beCaptchaEngineState(): Promise<CaptchaEngineStatus> {
+  const resp = await http.get<DataEnvelope<CaptchaEngineStatus>>('/api/v1/captcha/state')
   return resp.data.data
 }
 
