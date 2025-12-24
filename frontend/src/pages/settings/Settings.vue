@@ -5,11 +5,14 @@ import { ElMessage } from 'element-plus'
 import {
   beGetEmailSettings,
   beGetLimitsSettings,
+  beGetCaptchaPoolSettings,
   beSaveEmailSettings,
   beSaveLimitsSettings,
+  beSaveCaptchaPoolSettings,
   beTestEmail,
   type EmailSettings,
   type LimitsSettings,
+  type CaptchaPoolSettings,
 } from '@/services/backend'
 
 const loading = ref(false)
@@ -20,6 +23,9 @@ const formRef = ref<FormInstance>()
 const limitsLoading = ref(false)
 const limitsSaving = ref(false)
 
+const captchaPoolLoading = ref(false)
+const captchaPoolSaving = ref(false)
+
 const form = reactive<EmailSettings>({
   enabled: false,
   email: '',
@@ -29,6 +35,12 @@ const form = reactive<EmailSettings>({
 const limits = reactive<LimitsSettings>({
   maxPerTargetInFlight: 1,
   captchaMaxInFlight: 1,
+})
+
+const captchaPool = reactive<CaptchaPoolSettings>({
+  warmupSeconds: 30,
+  poolSize: 2,
+  itemTtlSeconds: 120,
 })
 
 function isValidEmailLike(value: string): boolean {
@@ -153,9 +165,44 @@ async function saveLimits() {
   }
 }
 
+async function loadCaptchaPool() {
+  captchaPoolLoading.value = true
+  try {
+    const data = await beGetCaptchaPoolSettings()
+    captchaPool.warmupSeconds = Number(data.warmupSeconds || 30)
+    captchaPool.poolSize = Number(data.poolSize || 2)
+    captchaPool.itemTtlSeconds = Number(data.itemTtlSeconds || 120)
+  } catch (e) {
+    ElMessage.error(e instanceof Error ? e.message : '加载失败')
+  } finally {
+    captchaPoolLoading.value = false
+  }
+}
+
+async function saveCaptchaPool() {
+  captchaPoolSaving.value = true
+  try {
+    const payload: Partial<CaptchaPoolSettings> = {
+      warmupSeconds: Math.max(1, Math.floor(Number(captchaPool.warmupSeconds || 30))),
+      poolSize: Math.max(1, Math.floor(Number(captchaPool.poolSize || 2))),
+      itemTtlSeconds: Math.max(1, Math.floor(Number(captchaPool.itemTtlSeconds || 120))),
+    }
+    const saved = await beSaveCaptchaPoolSettings(payload)
+    captchaPool.warmupSeconds = Number(saved.warmupSeconds || 30)
+    captchaPool.poolSize = Number(saved.poolSize || 2)
+    captchaPool.itemTtlSeconds = Number(saved.itemTtlSeconds || 120)
+    ElMessage.success('已保存')
+  } catch (e) {
+    ElMessage.error(e instanceof Error ? e.message : '保存失败')
+  } finally {
+    captchaPoolSaving.value = false
+  }
+}
+
 onMounted(() => {
   void load()
   void loadLimits()
+  void loadCaptchaPool()
 })
 </script>
 
@@ -212,6 +259,29 @@ onMounted(() => {
 
         <el-form-item>
           <el-button type="primary" :loading="limitsSaving" @click="saveLimits">保存</el-button>
+        </el-form-item>
+      </el-form>
+    </el-card>
+
+    <el-card shadow="never" header="验证码池" style="margin-top: 12px">
+      <el-form v-loading="captchaPoolLoading" :model="captchaPool" label-width="160px" style="max-width: 720px">
+        <el-form-item label="开抢前预热（秒）">
+          <el-input-number v-model="captchaPool.warmupSeconds" :min="1" :max="3600" :step="1" />
+          <div style="margin-left: 10px; color: #909399">默认 30：开抢前 30 秒开始维护验证码池</div>
+        </el-form-item>
+
+        <el-form-item label="验证码池数量">
+          <el-input-number v-model="captchaPool.poolSize" :min="1" :max="200" :step="1" />
+          <div style="margin-left: 10px; color: #909399">默认 2：后台会尽量维持池内数量达到该值</div>
+        </el-form-item>
+
+        <el-form-item label="单条有效期（秒）">
+          <el-input-number v-model="captchaPool.itemTtlSeconds" :min="1" :max="3600" :step="1" />
+          <div style="margin-left: 10px; color: #909399">倒计时从“拿到验证码返回值”的时刻开始计算</div>
+        </el-form-item>
+
+        <el-form-item>
+          <el-button type="primary" :loading="captchaPoolSaving" @click="saveCaptchaPool">保存</el-button>
         </el-form-item>
       </el-form>
     </el-card>

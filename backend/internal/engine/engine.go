@@ -3,7 +3,6 @@ package engine
 import (
 	"context"
 	"errors"
-	"fmt"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -17,7 +16,6 @@ import (
 	"sniping_engine/internal/notify"
 	"sniping_engine/internal/provider"
 	"sniping_engine/internal/store/sqlite"
-	"sniping_engine/internal/utils"
 )
 
 type Options struct {
@@ -37,6 +35,12 @@ type Engine struct {
 
 	limits config.LimitsConfig
 	task   config.TaskConfig
+
+	captchaPool *CaptchaPool
+
+	captchaPoolActivateAtMs atomic.Int64
+	captchaPoolActivated    atomic.Bool
+	captchaPoolMaintainer   sync.Once
 
 	mu      sync.Mutex
 	running bool
@@ -102,6 +106,7 @@ func New(opts Options) *Engine {
 		notifier:      opts.Notifier,
 		limits:        opts.Limits,
 		task:          opts.Task,
+		captchaPool:   NewCaptchaPool(DefaultCaptchaPoolSettings()),
 		states:        make(map[string]*model.TaskState),
 		perLimiter:    make(map[string]*rate.Limiter),
 		inFlight:      make(chan struct{}, maxInFlight),
@@ -180,6 +185,9 @@ func (e *Engine) StartAll(ctx context.Context) error {
 		go e.runTarget(runCtx, t)
 	}
 	e.mu.Unlock()
+
+	e.startCaptchaPoolMaintainer(runCtx)
+	e.recalcCaptchaPoolActivateAtMs()
 	return nil
 }
 
@@ -374,7 +382,22 @@ func (e *Engine) attemptOnce(ctx context.Context, target model.Target) {
 		return
 	}
 
-	res, updatedAcc2, err := e.provider.CreateOrder(ctx, acc, target, pre)
+	captchaVerifyParam, fromPool, err := e.captchaVerifyParamForOrder(ctx, acc, target, pre.NeedCaptcha)
+	if err != nil {
+		e.setError(target.ID, err)
+		return
+	}
+	if pre.NeedCaptcha && fromPool && e.bus != nil {
+		e.bus.Log("debug", "验证码池命中（下单）", map[string]any{
+			"targetId":  target.ID,
+			"accountId": acc.ID,
+		})
+	}
+
+	nextTarget := target
+	nextTarget.CaptchaVerifyParam = strings.TrimSpace(captchaVerifyParam)
+
+	res, updatedAcc2, err := e.provider.CreateOrder(ctx, acc, nextTarget, pre)
 	if err != nil {
 		e.setError(target.ID, err)
 		return
@@ -646,7 +669,29 @@ func (e *Engine) attemptWithAccount(ctx context.Context, target model.Target, ac
 		})
 	}
 
-	res, updatedAcc2, err := e.provider.CreateOrder(ctx, acc, target, pre)
+	captchaVerifyParam, fromPool, err := e.captchaVerifyParamForOrder(ctx, acc, target, pre.NeedCaptcha)
+	if err != nil {
+		e.setError(target.ID, err)
+		if e.bus != nil {
+			e.bus.Log("warn", "验证码处理失败（下单前）", map[string]any{
+				"targetId":  target.ID,
+				"accountId": acc.ID,
+				"error":     err.Error(),
+			})
+		}
+		return false
+	}
+	if pre.NeedCaptcha && fromPool && e.bus != nil {
+		e.bus.Log("debug", "验证码池命中（下单）", map[string]any{
+			"targetId":  target.ID,
+			"accountId": acc.ID,
+		})
+	}
+
+	nextTarget := target
+	nextTarget.CaptchaVerifyParam = strings.TrimSpace(captchaVerifyParam)
+
+	res, updatedAcc2, err := e.provider.CreateOrder(ctx, acc, nextTarget, pre)
 	if err != nil {
 		e.setError(target.ID, err)
 		if e.bus != nil {
@@ -822,58 +867,19 @@ func (e *Engine) TestBuyOnce(ctx context.Context, targetID string, captchaVerify
 		return TestBuyResult{CanBuy: false, NeedCaptcha: pre.NeedCaptcha, Success: false, TraceID: pre.TraceID, Message: "当前不可购买"}, nil
 	}
 
-	if pre.NeedCaptcha && strings.TrimSpace(target.CaptchaVerifyParam) == "" {
-		progress("captcha", "start", "正在通过验证码…", nil)
-		timestamp := time.Now().UnixMilli()
-		dracoToken := ""
-		for _, cookieEntry := range acc.Cookies {
-			for _, cookie := range cookieEntry.Cookies {
-				if cookie.Name == "draco_local" {
-					dracoToken = cookie.Value
-					break
-				}
-			}
-			if dracoToken != "" {
-				break
-			}
-		}
-
-		if e.bus != nil {
-			e.bus.Log("info", "captcha solving", map[string]any{
-				"accountId": acc.ID,
-				"targetId":  target.ID,
-			})
-		}
-		captchaVerifyParam, metrics, err := utils.SolveAliyunCaptchaWithMetrics(ctx, timestamp, dracoToken)
-		if err != nil {
-			if e.bus != nil {
-				e.bus.Log("warn", "captcha solve failed", map[string]any{
-					"accountId": acc.ID,
-					"targetId":  target.ID,
-					"attempts":  metrics.Attempts,
-					"costMs":    metrics.Duration.Milliseconds(),
-					"costSec":   fmt.Sprintf("%.2f", metrics.Duration.Seconds()),
-					"error":     err.Error(),
-				})
-			}
-			progress("captcha", "error", "验证码处理失败："+err.Error(), nil)
-			return TestBuyResult{}, err
-		}
-		if strings.TrimSpace(captchaVerifyParam) == "" {
-			progress("captcha", "error", "验证码处理失败：返回为空", nil)
-			return TestBuyResult{}, errors.New("captcha solving returned empty result")
-		}
-		if e.bus != nil {
-			e.bus.Log("info", "captcha solved", map[string]any{
-				"accountId": acc.ID,
-				"targetId":  target.ID,
-				"attempts":  metrics.Attempts,
-				"costMs":    metrics.Duration.Milliseconds(),
-				"costSec":   fmt.Sprintf("%.2f", metrics.Duration.Seconds()),
-			})
-		}
-		target.CaptchaVerifyParam = strings.TrimSpace(captchaVerifyParam)
+	captchaVerifyParam, fromPool, err := e.captchaVerifyParamForOrder(ctx, acc, target, pre.NeedCaptcha)
+	if err != nil {
+		progress("captcha", "error", "验证码处理失败："+err.Error(), nil)
+		return TestBuyResult{}, err
 	}
+	if pre.NeedCaptcha {
+		if fromPool {
+			progress("captcha_pool", "success", "已从验证码池获取", nil)
+		} else {
+			progress("captcha", "success", "验证码已准备", nil)
+		}
+	}
+	target.CaptchaVerifyParam = strings.TrimSpace(captchaVerifyParam)
 
 	if !e.waitLimits(ctx, acc.ID) {
 		progress("limits", "error", "等待限速失败", nil)

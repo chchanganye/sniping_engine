@@ -13,6 +13,7 @@ import (
 
 const emailSettingsKey = "email_settings"
 const limitsSettingsKey = "limits_settings"
+const captchaPoolSettingsKey = "captcha_pool_settings"
 
 func (s *Store) GetEmailSettings(ctx context.Context) (model.EmailSettings, bool, error) {
 	var row struct {
@@ -104,6 +105,46 @@ func (s *Store) UpsertLimitsSettings(ctx context.Context, v model.LimitsSettings
 	`, limitsSettingsKey, string(b), now)
 	if err != nil {
 		return model.LimitsSettings{}, err
+	}
+	return v, nil
+}
+
+func (s *Store) GetCaptchaPoolSettings(ctx context.Context) (model.CaptchaPoolSettings, bool, error) {
+	var row struct {
+		valueJSON string
+		updatedAt int64
+	}
+	err := s.db.QueryRowContext(ctx, `
+		SELECT value_json, updated_at FROM settings WHERE key = ?
+	`, captchaPoolSettingsKey).Scan(&row.valueJSON, &row.updatedAt)
+	if err != nil {
+		if errors.Is(err, sql.ErrNoRows) {
+			return model.CaptchaPoolSettings{}, false, nil
+		}
+		return model.CaptchaPoolSettings{}, false, err
+	}
+	var out model.CaptchaPoolSettings
+	if err := json.Unmarshal([]byte(row.valueJSON), &out); err != nil {
+		return model.CaptchaPoolSettings{}, false, err
+	}
+	return out, true, nil
+}
+
+func (s *Store) UpsertCaptchaPoolSettings(ctx context.Context, v model.CaptchaPoolSettings) (model.CaptchaPoolSettings, error) {
+	now := time.Now().UnixMilli()
+	b, err := json.Marshal(v)
+	if err != nil {
+		return model.CaptchaPoolSettings{}, err
+	}
+	_, err = s.db.ExecContext(ctx, `
+		INSERT INTO settings (key, value_json, updated_at)
+		VALUES (?, ?, ?)
+		ON CONFLICT(key) DO UPDATE SET
+			value_json = excluded.value_json,
+			updated_at = excluded.updated_at
+	`, captchaPoolSettingsKey, string(b), now)
+	if err != nil {
+		return model.CaptchaPoolSettings{}, err
 	}
 	return v, nil
 }

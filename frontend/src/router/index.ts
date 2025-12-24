@@ -46,6 +46,12 @@ const router = createRouter({
           meta: { title: '运行日志' },
         },
         {
+          path: '/captcha-pool',
+          name: 'captcha-pool',
+          component: () => import('@/pages/captcha_pool/CaptchaPool.vue'),
+          meta: { title: '验证码池' },
+        },
+        {
           path: '/settings',
           name: 'settings',
           component: () => import('@/pages/settings/Settings.vue'),

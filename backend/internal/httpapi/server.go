@@ -72,9 +72,12 @@ func (s *Server) Handler() http.Handler {
 	api.HandleFunc("/api/v1/engine/preflight", s.handleEnginePreflight)
 	api.HandleFunc("/api/v1/engine/test-buy", s.handleEngineTestBuy)
 	api.HandleFunc("/api/v1/captcha/state", s.handleCaptchaState)
+	api.HandleFunc("/api/v1/captcha/pool", s.handleCaptchaPool)
+	api.HandleFunc("/api/v1/captcha/pool/fill", s.handleCaptchaPoolFill)
 	api.HandleFunc("/api/v1/settings/email", s.handleEmailSettings)
 	api.HandleFunc("/api/v1/settings/email/test", s.handleEmailTest)
 	api.HandleFunc("/api/v1/settings/limits", s.handleLimitsSettings)
+	api.HandleFunc("/api/v1/settings/captcha-pool", s.handleCaptchaPoolSettings)
 	api.HandleFunc("/api/", s.handleUpstreamProxy)
 
 	mux.Handle("/api/", corsMiddleware(s.cfg.Server.Cors, api))
@@ -91,6 +94,52 @@ func (s *Server) handleCaptchaState(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	writeJSON(w, http.StatusOK, map[string]any{"data": utils.GetCaptchaEngineStatus()})
+}
+
+func (s *Server) handleCaptchaPool(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		writeJSON(w, http.StatusMethodNotAllowed, map[string]any{"error": "method not allowed"})
+		return
+	}
+	if s.engine == nil {
+		writeJSON(w, http.StatusInternalServerError, map[string]any{"error": "engine unavailable"})
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"data": s.engine.CaptchaPoolStatus()})
+}
+
+type captchaPoolFillPayload struct {
+	Count int `json:"count"`
+}
+
+func (s *Server) handleCaptchaPoolFill(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		writeJSON(w, http.StatusMethodNotAllowed, map[string]any{"error": "method not allowed"})
+		return
+	}
+	if s.engine == nil {
+		writeJSON(w, http.StatusInternalServerError, map[string]any{"error": "engine unavailable"})
+		return
+	}
+	var body captchaPoolFillPayload
+	if err := readJSON(r, &body); err != nil {
+		writeJSON(w, http.StatusBadRequest, map[string]any{"error": err.Error()})
+		return
+	}
+	count := body.Count
+	if count <= 0 {
+		writeJSON(w, http.StatusBadRequest, map[string]any{"error": "count is required"})
+		return
+	}
+	if count > 50 {
+		count = 50
+	}
+	added, failed, err := s.engine.FillCaptchaPool(r.Context(), count)
+	if err != nil {
+		writeJSON(w, http.StatusInternalServerError, map[string]any{"error": err.Error()})
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"data": map[string]any{"added": added, "failed": failed}})
 }
 
 func (s *Server) handleAccounts(w http.ResponseWriter, r *http.Request) {
@@ -533,6 +582,88 @@ func (s *Server) handleLimitsSettings(w http.ResponseWriter, r *http.Request) {
 		}
 		utils.SetCaptchaMaxConcurrent(saved.CaptchaMaxInFlight)
 
+		writeJSON(w, http.StatusOK, map[string]any{"data": saved})
+	default:
+		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+	}
+}
+
+type captchaPoolSettingsPayload struct {
+	WarmupSeconds  *int `json:"warmupSeconds,omitempty"`
+	PoolSize       *int `json:"poolSize,omitempty"`
+	ItemTTLSeconds *int `json:"itemTtlSeconds,omitempty"`
+}
+
+func (s *Server) handleCaptchaPoolSettings(w http.ResponseWriter, r *http.Request) {
+	switch r.Method {
+	case http.MethodGet:
+		val, ok, err := s.store.GetCaptchaPoolSettings(r.Context())
+		if err != nil {
+			writeJSON(w, http.StatusInternalServerError, map[string]any{"error": err.Error()})
+			return
+		}
+		if !ok {
+			writeJSON(w, http.StatusOK, map[string]any{"data": engine.DefaultCaptchaPoolSettings()})
+			return
+		}
+		writeJSON(w, http.StatusOK, map[string]any{"data": val})
+	case http.MethodPost:
+		var body captchaPoolSettingsPayload
+		if err := readJSON(r, &body); err != nil {
+			writeJSON(w, http.StatusBadRequest, map[string]any{"error": err.Error()})
+			return
+		}
+
+		current, ok, err := s.store.GetCaptchaPoolSettings(r.Context())
+		if err != nil {
+			writeJSON(w, http.StatusInternalServerError, map[string]any{"error": err.Error()})
+			return
+		}
+		if !ok {
+			current = engine.DefaultCaptchaPoolSettings()
+		}
+
+		next := current
+		if body.WarmupSeconds != nil {
+			next.WarmupSeconds = *body.WarmupSeconds
+		}
+		if body.PoolSize != nil {
+			next.PoolSize = *body.PoolSize
+		}
+		if body.ItemTTLSeconds != nil {
+			next.ItemTTLSeconds = *body.ItemTTLSeconds
+		}
+
+		if next.WarmupSeconds <= 0 {
+			next.WarmupSeconds = 30
+		}
+		if next.PoolSize <= 0 {
+			next.PoolSize = 2
+		}
+		if next.ItemTTLSeconds <= 0 {
+			next.ItemTTLSeconds = 120
+		}
+		if next.WarmupSeconds > 3600 {
+			writeJSON(w, http.StatusBadRequest, map[string]any{"error": "warmupSeconds is too large"})
+			return
+		}
+		if next.PoolSize > 200 {
+			writeJSON(w, http.StatusBadRequest, map[string]any{"error": "poolSize is too large"})
+			return
+		}
+		if next.ItemTTLSeconds > 3600 {
+			writeJSON(w, http.StatusBadRequest, map[string]any{"error": "itemTtlSeconds is too large"})
+			return
+		}
+
+		saved, err := s.store.UpsertCaptchaPoolSettings(r.Context(), next)
+		if err != nil {
+			writeJSON(w, http.StatusInternalServerError, map[string]any{"error": err.Error()})
+			return
+		}
+		if s.engine != nil {
+			_ = s.engine.SetCaptchaPoolSettings(saved)
+		}
 		writeJSON(w, http.StatusOK, map[string]any{"data": saved})
 	default:
 		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)

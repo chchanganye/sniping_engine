@@ -92,6 +92,29 @@ export interface CaptchaEngineStatus {
   lastAttempts?: number
 }
 
+export interface CaptchaPoolSettings {
+  warmupSeconds: number
+  poolSize: number
+  itemTtlSeconds: number
+}
+
+export interface CaptchaPoolItemView {
+  id: string
+  createdAtMs: number
+  expiresAtMs: number
+  preview?: string
+}
+
+export interface CaptchaPoolStatus {
+  nowMs: number
+  activated: boolean
+  activateAtMs: number
+  desiredSize: number
+  size: number
+  settings: CaptchaPoolSettings
+  items: CaptchaPoolItemView[]
+}
+
 type DataEnvelope<T> = { data: T }
 
 export async function beListAccounts(): Promise<BackendAccount[]> {
@@ -185,8 +208,28 @@ export async function beSaveLimitsSettings(payload: Partial<LimitsSettings>): Pr
   return resp.data.data
 }
 
+export async function beGetCaptchaPoolSettings(): Promise<CaptchaPoolSettings> {
+  const resp = await http.get<DataEnvelope<CaptchaPoolSettings>>('/api/v1/settings/captcha-pool')
+  return resp.data.data
+}
+
+export async function beSaveCaptchaPoolSettings(payload: Partial<CaptchaPoolSettings>): Promise<CaptchaPoolSettings> {
+  const resp = await http.post<DataEnvelope<CaptchaPoolSettings>>('/api/v1/settings/captcha-pool', payload)
+  return resp.data.data
+}
+
 export async function beCaptchaEngineState(): Promise<CaptchaEngineStatus> {
   const resp = await http.get<DataEnvelope<CaptchaEngineStatus>>('/api/v1/captcha/state')
+  return resp.data.data
+}
+
+export async function beCaptchaPoolStatus(): Promise<CaptchaPoolStatus> {
+  const resp = await http.get<DataEnvelope<CaptchaPoolStatus>>('/api/v1/captcha/pool')
+  return resp.data.data
+}
+
+export async function beCaptchaPoolFill(count: number): Promise<{ added: number; failed: number }> {
+  const resp = await http.post<DataEnvelope<{ added: number; failed: number }>>('/api/v1/captcha/pool/fill', { count })
   return resp.data.data
 }
 

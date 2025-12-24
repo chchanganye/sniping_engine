@@ -19,6 +19,7 @@ import (
 	"sniping_engine/internal/engine"
 	"sniping_engine/internal/httpapi"
 	"sniping_engine/internal/logbus"
+	"sniping_engine/internal/model"
 	"sniping_engine/internal/notify"
 	"sniping_engine/internal/provider/standard"
 	"sniping_engine/internal/store/sqlite"
@@ -56,6 +57,18 @@ func main() {
 		bus.Log("warn", "读取并发设置失败", map[string]any{"error": err.Error()})
 	}
 
+	captchaPoolSettings := engine.DefaultCaptchaPoolSettings()
+	if v, ok, err := store.GetCaptchaPoolSettings(ctx); err == nil && ok {
+		// normalize later in engine
+		captchaPoolSettings = model.CaptchaPoolSettings{
+			WarmupSeconds:  v.WarmupSeconds,
+			PoolSize:       v.PoolSize,
+			ItemTTLSeconds: v.ItemTTLSeconds,
+		}
+	} else if err != nil {
+		bus.Log("warn", "读取验证码池设置失败", map[string]any{"error": err.Error()})
+	}
+
 	utils.SetCaptchaMaxConcurrent(cfg.Limits.CaptchaMaxInFlight)
 	utils.SetCaptchaEngineState(utils.CaptchaEngineStateStarting, "", 0)
 	go func() {
@@ -81,6 +94,7 @@ func main() {
 		Task:     cfg.Task,
 		Notifier: emailNotifier,
 	})
+	_ = eng.SetCaptchaPoolSettings(captchaPoolSettings)
 
 	api := httpapi.New(httpapi.Options{
 		Cfg:      cfg,
