@@ -43,6 +43,8 @@ const (
 	CaptchaEngineStateError    CaptchaEngineState = "error"
 )
 
+const aliyunCaptchaTargetURL = "https://m.4008117117.com/aliyun-captcha&cookie=true"
+
 type CaptchaEngineStatus struct {
 	State         CaptchaEngineState `json:"state"`
 	StartedAtMs   int64              `json:"startedAtMs"`
@@ -372,15 +374,24 @@ func WarmupCaptchaEngine(maxWarmPages int) error {
 	}
 
 	// 预热页面池：创建 warmPages 个页面并归还到池里。
-	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
+	ctx, cancel := context.WithTimeout(context.Background(), 90*time.Second)
 	defer cancel()
 
 	for i := 0; i < warmPages; i++ {
-		cp, _, err := acquireCaptchaPage(ctx)
+		pageCtx, pageCancel := context.WithTimeout(ctx, 20*time.Second)
+		cp, page, err := acquireCaptchaPage(pageCtx)
 		if err != nil {
+			pageCancel()
 			SetCaptchaEngineState(CaptchaEngineStateError, err.Error(), warmPages)
 			return err
 		}
+		if err := navigateCaptchaPage(page, aliyunCaptchaTargetURL); err != nil {
+			pageCancel()
+			releaseCaptchaPage(cp)
+			SetCaptchaEngineState(CaptchaEngineStateError, err.Error(), warmPages)
+			return err
+		}
+		pageCancel()
 		releaseCaptchaPage(cp)
 	}
 
@@ -574,7 +585,10 @@ func acquireCaptchaPage(ctx context.Context) (*captchaPage, *rod.Page, error) {
 		captchaPagePool = captchaPagePool[:n-1]
 		captchaPagePoolMu.Unlock()
 		if cp != nil && cp.page != nil {
-			return cp, cp.page.Context(ctx), nil
+			p := cp.page.Context(ctx)
+			_ = proto.NetworkEnable{}.Call(p)
+			_ = proto.NetworkSetCacheDisabled{CacheDisabled: true}.Call(p)
+			return cp, p, nil
 		}
 	} else {
 		captchaPagePoolMu.Unlock()
@@ -600,7 +614,10 @@ func acquireCaptchaPage(ctx context.Context) (*captchaPage, *rod.Page, error) {
 	}
 
 	cp := &captchaPage{incognito: incognito, page: page}
-	return cp, page.Context(ctx), nil
+	p := page.Context(ctx)
+	_ = proto.NetworkEnable{}.Call(p)
+	_ = proto.NetworkSetCacheDisabled{CacheDisabled: true}.Call(p)
+	return cp, p, nil
 }
 
 func releaseCaptchaPage(cp *captchaPage) {
@@ -608,11 +625,7 @@ func releaseCaptchaPage(cp *captchaPage) {
 		return
 	}
 
-	// 复用页面时做最小清理，避免下次复用落在上一次的页面状态里。
-	_ = rod.Try(func() {
-		p := cp.page.Context(context.Background()).Timeout(2 * time.Second)
-		_ = p.Navigate("about:blank")
-	})
+	// 不再归还到 about:blank：保持页面“预打开”状态，降低抢购时的首次加载延迟。
 
 	captchaPagePoolMu.Lock()
 	captchaPagePool = append(captchaPagePool, cp)
@@ -772,13 +785,8 @@ func solveAliyunCaptchaWithMetrics(parent context.Context, timestamp int64, drac
 	}
 	defer release()
 
-	makeTargetURL := func(attempt int) string {
-		t := timestamp
-		if attempt > 1 {
-			t = time.Now().UnixMilli()
-		}
-		// 额外带一个随机参数，避免中间层缓存导致不刷新验证码资源。
-		return fmt.Sprintf("https://m.4008117117.com/aliyun-captcha?t=%d&cookie=true&draco_local=%s&r=%d", t, dracoToken, rand.Int63())
+	makeTargetURL := func(_ int) string {
+		return aliyunCaptchaTargetURL
 	}
 
 	cp, page, err := acquireCaptchaPage(ctx)
@@ -974,8 +982,15 @@ func solveAliyunCaptchaWithMetrics(parent context.Context, timestamp int64, drac
 
 	go router.Run()
 
-	// --- 打开页面：只等 DOMContentLoaded 即可（不等图片等资源）---
-	if err := navigateCaptchaPage(page, makeTargetURL(1)); err != nil {
+	// --- 打开页面：优先复用“已预打开”的页面，必要时再导航 ---
+	ensureCaptchaPageOpened := func() error {
+		if _, err := page.Timeout(500 * time.Millisecond).Element("#button"); err == nil {
+			return nil
+		}
+		return navigateCaptchaPage(page, makeTargetURL(1))
+	}
+
+	if err := ensureCaptchaPageOpened(); err != nil {
 		metrics.Duration = time.Since(started)
 		return "", metrics, fmt.Errorf("打开页面失败: %v", err)
 	}
