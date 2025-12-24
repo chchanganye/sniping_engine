@@ -441,6 +441,7 @@ func getCaptchaBrowser() (*rod.Browser, error) {
 				return v
 			}
 		}
+
 		candidates := []string{
 			"/usr/bin/chromium",
 			"/usr/bin/chromium-browser",
