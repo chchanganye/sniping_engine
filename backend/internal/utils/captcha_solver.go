@@ -101,16 +101,19 @@ const (
 	SlideOffset = 0.0
 )
 
-// 无头模式开关：默认 true（生产环境）。
+// captchaHeadlessMode 无头模式开关：默认 true（生产环境）。
 // 如需本地调试打开浏览器窗口，可设置环境变量：SNIPING_ENGINE_CAPTCHA_HEADLESS=0
-var HeadlessMode = func() bool {
+//
+// 注意：这里必须“动态读取环境变量”，不能在包初始化时只读一次。
+// 因为本项目的本地验证码测试会从 backend/.env 注入环境变量，而注入发生在测试用例开始时。
+func captchaHeadlessMode() bool {
 	v := strings.TrimSpace(os.Getenv("SNIPING_ENGINE_CAPTCHA_HEADLESS"))
 	if v == "" {
 		return true
 	}
 	v = strings.ToLower(v)
 	return !(v == "0" || v == "false" || v == "no" || v == "off")
-}()
+}
 
 type solveRequest struct {
 	SlideImage      string `json:"slide_image"`
@@ -464,7 +467,7 @@ func getCaptchaBrowser() (*rod.Browser, error) {
 		return ""
 	}
 
-	l := launcher.New().Headless(HeadlessMode)
+	l := launcher.New().Headless(captchaHeadlessMode())
 	if runtime.GOOS == "linux" {
 		l = l.NoSandbox(true).Set("disable-dev-shm-usage")
 	}
