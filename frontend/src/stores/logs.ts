@@ -76,10 +76,21 @@ function friendlyLogMessage(msg: string, fields?: Record<string, any>) {
   if (m === 'engine stopped') return '引擎已停止'
   if (m === 'target waiting for rush time') return '等待开抢时间…'
   if (m === 'preflight: canBuy=false') return '预下单结果：当前不可购买'
+  if (m === '预下单失败') return `预下单失败：${normalizeErrorText(String(fields?.error ?? '')) || '未知错误'}${formatIds(fields)}`
+  if (m === '预下单成功，准备下单') {
+    const needCaptcha = fields?.needCaptcha === true ? '需要验证码' : '不需要验证码'
+    return `预下单成功：${needCaptcha}${formatIds(fields)}`
+  }
+  if (m === '提交订单中') return `正在提交订单…${formatIds(fields)}`
+  if (m === '下单失败') return `下单失败：${normalizeErrorText(String(fields?.error ?? '')) || '未知错误'}${formatIds(fields)}`
+  if (m === '开始测试抢购') return `开始测试抢购…${formatIds(fields)}`
+  if (m === '测试下单失败') return `测试下单失败：${normalizeErrorText(String(fields?.error ?? '')) || '未知错误'}${formatIds(fields)}`
 
   if (m === 'captcha engine starting') return '验证码引擎状态：启动中'
   if (m === 'captcha engine ready') return `验证码引擎状态：已就绪（预热页：${String(fields?.warmPages ?? '-')}，池：${String(fields?.pagePoolSize ?? '-')}）`
   if (m === 'captcha engine warmup failed') return `验证码引擎状态：启动失败（${normalizeErrorText(String(fields?.error ?? '')) || '未知错误'}）`
+
+  if (m === 'captcha solving') return `验证码处理中…${formatIds(fields)}`
 
   if (m === 'captcha solved') {
     const attempts = fields?.attempts != null ? String(fields.attempts) : '-'
@@ -96,7 +107,7 @@ function friendlyLogMessage(msg: string, fields?: Record<string, any>) {
   if (m === 'http request') return `正在发送网络请求：${summarizeRequest(fields) || '请求中…'}`
   if (m === 'proxy request') return `正在代理请求：${summarizeRequest(fields) || '请求中…'}`
 
-  if (m === 'upstream request failed') {
+  if (m === 'upstream request failed' || m === '上游请求失败') {
     const reason = normalizeErrorText(String(fields?.error ?? '')) || '上游返回异常'
     const api = typeof fields?.api === 'string' ? String(fields.api).trim() : ''
     return api ? `上游请求失败（${api}）：${reason}` : `上游请求失败：${reason}`

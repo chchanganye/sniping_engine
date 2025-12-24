@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"net/http/cookiejar"
 	"net/url"
+	"os"
 	"strconv"
 	"strings"
 	"time"
@@ -269,6 +270,12 @@ func (p *StandardProvider) CreateOrder(ctx context.Context, account model.Accoun
 
 			// 调用验证码解决方法（带统计数据）
 			var metrics utils.CaptchaSolveMetrics
+			if p.bus != nil {
+				p.bus.Log("info", "captcha solving", map[string]any{
+					"accountId": account.ID,
+					"targetId":  target.ID,
+				})
+			}
 			captchaVerifyParam, metrics, err = utils.SolveAliyunCaptchaWithMetrics(ctx, timestamp, dracoToken)
 			if err != nil {
 				if p.bus != nil {
@@ -518,11 +525,10 @@ func (p *StandardProvider) newClient(account model.Account) (*resty.Client, *coo
 	}
 
 	client.OnBeforeRequest(func(_ *resty.Client, req *resty.Request) error {
-		if p.bus != nil {
-			p.bus.Log("debug", "发送网络请求", map[string]any{
-				"method": req.Method,
-				"url":    req.URL,
-			})
+		verbose := strings.EqualFold(strings.TrimSpace(os.Getenv("SNIPING_ENGINE_VERBOSE_HTTP")), "1") ||
+			strings.EqualFold(strings.TrimSpace(os.Getenv("SNIPING_ENGINE_VERBOSE_HTTP")), "true")
+		if verbose && p.bus != nil {
+			p.bus.Log("debug", "发送网络请求", map[string]any{"method": req.Method, "url": req.URL})
 		}
 		return nil
 	})

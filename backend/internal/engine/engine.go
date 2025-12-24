@@ -3,6 +3,7 @@ package engine
 import (
 	"context"
 	"errors"
+	"fmt"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -593,6 +594,13 @@ func (e *Engine) attemptWithAccount(ctx context.Context, target model.Target, ac
 	pre, updatedAcc, err := e.provider.Preflight(ctx, acc, target)
 	if err != nil {
 		e.setError(target.ID, err)
+		if e.bus != nil {
+			e.bus.Log("warn", "预下单失败", map[string]any{
+				"targetId":  target.ID,
+				"accountId": acc.ID,
+				"error":     err.Error(),
+			})
+		}
 		return false
 	}
 	_ = e.persistAccount(ctx, updatedAcc)
@@ -617,13 +625,37 @@ func (e *Engine) attemptWithAccount(ctx context.Context, target model.Target, ac
 		return false
 	}
 
+	if e.bus != nil {
+		e.bus.Log("info", "预下单成功，准备下单", map[string]any{
+			"targetId":     target.ID,
+			"accountId":    acc.ID,
+			"needCaptcha":  pre.NeedCaptcha,
+			"traceId":      pre.TraceID,
+			"captchaParam": strings.TrimSpace(target.CaptchaVerifyParam) != "",
+		})
+	}
+
 	if !e.waitLimits(ctx, acc.ID) {
 		return false
+	}
+
+	if e.bus != nil {
+		e.bus.Log("info", "提交订单中", map[string]any{
+			"targetId":  target.ID,
+			"accountId": acc.ID,
+		})
 	}
 
 	res, updatedAcc2, err := e.provider.CreateOrder(ctx, acc, target, pre)
 	if err != nil {
 		e.setError(target.ID, err)
+		if e.bus != nil {
+			e.bus.Log("warn", "下单失败", map[string]any{
+				"targetId":  target.ID,
+				"accountId": acc.ID,
+				"error":     err.Error(),
+			})
+		}
 		return false
 	}
 	_ = e.persistAccount(ctx, updatedAcc2)
@@ -724,6 +756,12 @@ func (e *Engine) TestBuyOnce(ctx context.Context, targetID string, captchaVerify
 	progress("select_account", "success", "已选择账号", map[string]any{
 		"mobile": acc.Mobile,
 	})
+	if e.bus != nil {
+		e.bus.Log("info", "开始测试抢购", map[string]any{
+			"targetId":  target.ID,
+			"accountId": acc.ID,
+		})
+	}
 
 	e.ensureAccountLimiter(acc.ID)
 
@@ -799,14 +837,40 @@ func (e *Engine) TestBuyOnce(ctx context.Context, targetID string, captchaVerify
 				break
 			}
 		}
-		captchaVerifyParam, err := utils.SolveAliyunCaptchaWithContext(ctx, timestamp, dracoToken)
+
+		if e.bus != nil {
+			e.bus.Log("info", "captcha solving", map[string]any{
+				"accountId": acc.ID,
+				"targetId":  target.ID,
+			})
+		}
+		captchaVerifyParam, metrics, err := utils.SolveAliyunCaptchaWithMetrics(ctx, timestamp, dracoToken)
 		if err != nil {
+			if e.bus != nil {
+				e.bus.Log("warn", "captcha solve failed", map[string]any{
+					"accountId": acc.ID,
+					"targetId":  target.ID,
+					"attempts":  metrics.Attempts,
+					"costMs":    metrics.Duration.Milliseconds(),
+					"costSec":   fmt.Sprintf("%.2f", metrics.Duration.Seconds()),
+					"error":     err.Error(),
+				})
+			}
 			progress("captcha", "error", "验证码处理失败："+err.Error(), nil)
 			return TestBuyResult{}, err
 		}
 		if strings.TrimSpace(captchaVerifyParam) == "" {
 			progress("captcha", "error", "验证码处理失败：返回为空", nil)
 			return TestBuyResult{}, errors.New("captcha solving returned empty result")
+		}
+		if e.bus != nil {
+			e.bus.Log("info", "captcha solved", map[string]any{
+				"accountId": acc.ID,
+				"targetId":  target.ID,
+				"attempts":  metrics.Attempts,
+				"costMs":    metrics.Duration.Milliseconds(),
+				"costSec":   fmt.Sprintf("%.2f", metrics.Duration.Seconds()),
+			})
 		}
 		target.CaptchaVerifyParam = strings.TrimSpace(captchaVerifyParam)
 	}
@@ -820,6 +884,13 @@ func (e *Engine) TestBuyOnce(ctx context.Context, targetID string, captchaVerify
 	res, updatedAcc2, err := e.provider.CreateOrder(ctx, acc, target, pre)
 	if err != nil {
 		e.setError(target.ID, err)
+		if e.bus != nil {
+			e.bus.Log("warn", "测试下单失败", map[string]any{
+				"targetId":  target.ID,
+				"accountId": acc.ID,
+				"error":     err.Error(),
+			})
+		}
 		progress("create_order", "error", err.Error(), nil)
 		return TestBuyResult{}, err
 	}

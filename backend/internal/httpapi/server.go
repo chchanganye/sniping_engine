@@ -9,6 +9,7 @@ import (
 	"net/http"
 	"net/http/cookiejar"
 	"net/url"
+	"os"
 	"strconv"
 	"strings"
 	"time"
@@ -845,11 +846,10 @@ func (s *Server) newAnonymousUpstreamClient(jar *cookiejar.Jar, userAgent string
 	client.SetHeader("x-requested-with", "XMLHttpRequest")
 
 	client.OnBeforeRequest(func(_ *resty.Client, req *resty.Request) error {
-		if s.bus != nil {
-			s.bus.Log("debug", "代理请求", map[string]any{
-				"method": req.Method,
-				"url":    req.URL,
-			})
+		verbose := strings.EqualFold(strings.TrimSpace(os.Getenv("SNIPING_ENGINE_VERBOSE_HTTP")), "1") ||
+			strings.EqualFold(strings.TrimSpace(os.Getenv("SNIPING_ENGINE_VERBOSE_HTTP")), "true")
+		if verbose && s.bus != nil {
+			s.bus.Log("debug", "代理请求", map[string]any{"method": req.Method, "url": req.URL})
 		}
 		return nil
 	})
@@ -1127,11 +1127,10 @@ func (s *Server) newUpstreamClient(account model.Account) (*resty.Client, *cooki
 	}
 
 	client.OnBeforeRequest(func(_ *resty.Client, req *resty.Request) error {
-		if s.bus != nil {
-			s.bus.Log("debug", "代理请求", map[string]any{
-				"method": req.Method,
-				"url":    req.URL,
-			})
+		verbose := strings.EqualFold(strings.TrimSpace(os.Getenv("SNIPING_ENGINE_VERBOSE_HTTP")), "1") ||
+			strings.EqualFold(strings.TrimSpace(os.Getenv("SNIPING_ENGINE_VERBOSE_HTTP")), "true")
+		if verbose && s.bus != nil {
+			s.bus.Log("debug", "代理请求", map[string]any{"method": req.Method, "url": req.URL})
 		}
 		return nil
 	})

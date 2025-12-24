@@ -13,6 +13,7 @@ import (
 	"net"
 	"net/http"
 	"os"
+	"os/exec"
 	"runtime"
 	"strconv"
 	"strings"
@@ -173,6 +174,12 @@ var (
 	captchaEngineErr     string
 	captchaEngineWarm    int
 
+	captchaEngineStateChMu sync.Mutex
+	captchaEngineStateCh   = make(chan struct{})
+
+	captchaWarmupMu      sync.Mutex
+	captchaWarmupRunning bool
+
 	captchaSolveCount    atomic.Int64
 	captchaSolveTotalMs  atomic.Int64
 	captchaLastSolveAtMs atomic.Int64
@@ -183,6 +190,18 @@ var (
 type captchaPage struct {
 	incognito *rod.Browser
 	page      *rod.Page
+}
+
+func closeChanSafe(ch chan struct{}) {
+	defer func() { _ = recover() }()
+	close(ch)
+}
+
+func broadcastCaptchaEngineStateChanged() {
+	captchaEngineStateChMu.Lock()
+	closeChanSafe(captchaEngineStateCh)
+	captchaEngineStateCh = make(chan struct{})
+	captchaEngineStateChMu.Unlock()
 }
 
 func SetCaptchaEngineState(state CaptchaEngineState, errText string, warmPages int) {
@@ -211,6 +230,8 @@ func SetCaptchaEngineState(state CaptchaEngineState, errText string, warmPages i
 	if warmPages > 0 {
 		captchaEngineWarm = warmPages
 	}
+
+	broadcastCaptchaEngineStateChanged()
 }
 
 func GetCaptchaEngineStatus() CaptchaEngineStatus {
@@ -240,6 +261,79 @@ func GetCaptchaEngineStatus() CaptchaEngineStatus {
 		LastAttempts:  captchaLastAttempts.Load(),
 		GoRoutines:    runtime.NumGoroutine(),
 	}
+}
+
+// WaitCaptchaEngineReady 等待验证码引擎进入“已就绪”状态；若进入“异常”状态则返回错误。
+func WaitCaptchaEngineReady(ctx context.Context) (CaptchaEngineStatus, error) {
+	for {
+		st := GetCaptchaEngineStatus()
+		if st.State == CaptchaEngineStateReady {
+			return st, nil
+		}
+		if st.State == CaptchaEngineStateError {
+			if strings.TrimSpace(st.LastError) != "" {
+				return st, errors.New(strings.TrimSpace(st.LastError))
+			}
+			return st, errors.New("验证码引擎启动失败")
+		}
+
+		captchaEngineStateChMu.Lock()
+		ch := captchaEngineStateCh
+		captchaEngineStateChMu.Unlock()
+
+		select {
+		case <-ch:
+			continue
+		case <-ctx.Done():
+			return GetCaptchaEngineStatus(), ctx.Err()
+		}
+	}
+}
+
+func getCaptchaMaxConcurrent() int {
+	captchaSemaphoreMu.RLock()
+	sem := captchaSemaphore
+	captchaSemaphoreMu.RUnlock()
+	if sem == nil || cap(sem) <= 0 {
+		return 1
+	}
+	return cap(sem)
+}
+
+// EnsureCaptchaEngineReady 确保验证码引擎已启动并就绪：
+// - 若未启动/启动失败，会触发一次预热（可能需要下载浏览器）
+// - 若正在启动，会等待就绪
+func EnsureCaptchaEngineReady(ctx context.Context, warmPages int) (CaptchaEngineStatus, error) {
+	st := GetCaptchaEngineStatus()
+	if st.State == CaptchaEngineStateReady {
+		return st, nil
+	}
+	if warmPages <= 0 {
+		warmPages = st.WarmPages
+	}
+	if warmPages <= 0 {
+		warmPages = getCaptchaMaxConcurrent()
+	}
+
+	needStart := st.State == CaptchaEngineStateStopped || st.State == CaptchaEngineStateError
+	if needStart {
+		captchaWarmupMu.Lock()
+		st2 := GetCaptchaEngineStatus()
+		if (st2.State == CaptchaEngineStateStopped || st2.State == CaptchaEngineStateError) && !captchaWarmupRunning {
+			captchaWarmupRunning = true
+			go func(pages int) {
+				defer func() {
+					captchaWarmupMu.Lock()
+					captchaWarmupRunning = false
+					captchaWarmupMu.Unlock()
+				}()
+				_ = WarmupCaptchaEngine(pages)
+			}(warmPages)
+		}
+		captchaWarmupMu.Unlock()
+	}
+
+	return WaitCaptchaEngineReady(ctx)
 }
 
 // WarmupCaptchaBrowser 预热验证码浏览器（可选）。
@@ -333,7 +427,50 @@ func getCaptchaBrowser() (*rod.Browser, error) {
 		return captchaBrowser, nil
 	}
 
+	detectSystemChromeBin := func() string {
+		if v := strings.TrimSpace(os.Getenv("ROD_BROWSER_BIN")); v != "" {
+			if _, err := os.Stat(v); err == nil {
+				return v
+			}
+		}
+		if v := strings.TrimSpace(os.Getenv("SNIPING_ENGINE_CHROME_BIN")); v != "" {
+			if _, err := os.Stat(v); err == nil {
+				return v
+			}
+		}
+		candidates := []string{
+			"/usr/bin/chromium",
+			"/usr/bin/chromium-browser",
+			"/usr/bin/google-chrome",
+			"/usr/bin/google-chrome-stable",
+		}
+		for _, p := range candidates {
+			if _, err := os.Stat(p); err == nil {
+				return p
+			}
+		}
+		if p, err := exec.LookPath("chromium"); err == nil && strings.TrimSpace(p) != "" {
+			return p
+		}
+		if p, err := exec.LookPath("chromium-browser"); err == nil && strings.TrimSpace(p) != "" {
+			return p
+		}
+		if p, err := exec.LookPath("google-chrome"); err == nil && strings.TrimSpace(p) != "" {
+			return p
+		}
+		if p, err := exec.LookPath("google-chrome-stable"); err == nil && strings.TrimSpace(p) != "" {
+			return p
+		}
+		return ""
+	}
+
 	l := launcher.New().Headless(HeadlessMode)
+	if runtime.GOOS == "linux" {
+		l = l.NoSandbox(true).Set("disable-dev-shm-usage")
+	}
+	if bin := detectSystemChromeBin(); bin != "" {
+		l = l.Bin(bin)
+	}
 	u, err := l.Launch()
 	if err != nil {
 		l.Kill()
@@ -618,6 +755,12 @@ func solveAliyunCaptchaWithMetrics(parent context.Context, timestamp int64, drac
 
 	ctx, cancel := context.WithTimeout(parent, 360*time.Second)
 	defer cancel()
+
+	// 如果验证码引擎还没就绪（首次启动可能在下载浏览器），这里先等待，避免抢购阶段因为超时而直接失败。
+	if _, err := EnsureCaptchaEngineReady(ctx, 0); err != nil {
+		metrics.Duration = time.Since(started)
+		return "", metrics, err
+	}
 
 	release, err := acquireCaptchaSlot(ctx)
 	if err != nil {
