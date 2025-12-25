@@ -23,6 +23,7 @@ const {
   categories,
   categoriesLoading,
   selectedCategoryId,
+  apiSkuGroups,
   skuGroups,
   selectedGroupId,
   goods,
@@ -92,11 +93,14 @@ async function refreshCategories() {
   }
 }
 
-async function loadGoodsByCategory(frontCategoryId: number) {
+async function loadGoodsByCategory(
+  frontCategoryId: number,
+  groupHints?: Array<{ id: number; name?: string }> | undefined,
+) {
   const token = currentAccount.value?.token
   if (!token) return
   try {
-    await goodsStore.loadGoodsByCategory(token, frontCategoryId, 1, 500)
+    await goodsStore.loadGoodsByCategory(token, frontCategoryId, 1, 500, groupHints)
   } catch (e) {
     ElMessage.error(e instanceof Error ? e.message : '获取分类商品失败')
   }
@@ -104,22 +108,26 @@ async function loadGoodsByCategory(frontCategoryId: number) {
 
 async function onTreeNodeClick(node: ShopCategoryNode) {
   goodsStore.setSelectedCategoryId(node.id)
-
-  const isMaybeGroupLeaf = Number(node.level) >= 2 && Number(node.pid) > 0
-  if (isMaybeGroupLeaf) {
-    goodsStore.setSelectedGroupId(node.id)
-    await loadGoodsByCategory(node.pid)
-    return
-  }
-
   goodsStore.setSelectedGroupId(undefined)
-  await loadGoodsByCategory(node.id)
+  const bindChildren = (node as any)?.extra?._bindChildren as Array<{ id: number; name?: string }> | undefined
+  const groupHints = Array.isArray(bindChildren) && bindChildren.length > 0 ? bindChildren : undefined
+  await loadGoodsByCategory(node.id, groupHints)
 
-  // 兼容某些“树节点是分组，但接口需要用父分类ID查询”的情况：
-  // 如果按 node.id 查不到商品，尝试用 pid 重新加载并把 node.id 作为分组筛选。
-  if (goods.value.length === 0 && Number(node.pid) > 0) {
-    goodsStore.setSelectedGroupId(node.id)
-    await loadGoodsByCategory(node.pid)
+  // 兼容“左侧节点是分组容器，真实商品在父分类里通过标签(categoryId)区分”的场景：
+  // - 先按 node.id 请求
+  // - 若返回空，再按 node.pid 请求，并自动选中该节点的第一个绑定标签（若有）
+  const hintIds = new Set((groupHints ?? []).map((c) => Number(c.id)).filter((v) => Number.isFinite(v) && v > 0))
+  const apiMatchesHints = hintIds.size > 0 && apiSkuGroups.value.some((g) => hintIds.has(g.categoryId))
+  if ((!apiSkuGroups.value.length || !apiMatchesHints) && Number(node.pid) > 0 && hintIds.size > 0) {
+    const parentId = Number(node.pid)
+    await loadGoodsByCategory(parentId, groupHints)
+    const parentMatchesHints = apiSkuGroups.value.some((g) => hintIds.has(g.categoryId))
+    if (parentMatchesHints && groupHints?.length === 1) {
+      goodsStore.setSelectedGroupId(Number(groupHints[0]!.id))
+    } else if (!parentMatchesHints) {
+      goodsStore.setSelectedGroupId(undefined)
+      await loadGoodsByCategory(node.id, groupHints)
+    }
   }
 }
 
@@ -221,9 +229,7 @@ watch(
     const first = list[0]
     if (!first) return
     const target = first.childrenList?.[0] ?? first
-    goodsStore.setSelectedCategoryId(target.id)
-    await loadGoodsByCategory(target.id)
-    goodsStore.setSelectedGroupId(undefined)
+    await onTreeNodeClick(target)
   },
   { deep: false },
 )

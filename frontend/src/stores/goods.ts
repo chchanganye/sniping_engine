@@ -27,7 +27,18 @@ function normalizeNumber(value: unknown): number | undefined {
 function normalizeCategoryNode(raw: any): ShopCategoryNode {
   const level = Number(raw?.level)
   const rawChildren = Array.isArray(raw?.childrenList) ? raw.childrenList : []
+  const bindChildren = rawChildren
+    .filter((c: any) => c && c.hasBind === true)
+    .map((c: any) => ({ id: Number(c?.id), name: normalizeText(c?.name) }))
+    .filter((c: any) => Number.isFinite(c.id) && c.id > 0)
+
   const children = level >= 2 ? [] : rawChildren.map(normalizeCategoryNode)
+
+  const rawExtra = raw?.extra
+  const extra =
+    rawExtra && typeof rawExtra === 'object' && !Array.isArray(rawExtra)
+      ? { ...(rawExtra as any), _bindChildren: bindChildren }
+      : { raw: rawExtra, _bindChildren: bindChildren }
   return {
     id: Number(raw?.id),
     pid: Number(raw?.pid),
@@ -38,7 +49,7 @@ function normalizeCategoryNode(raw: any): ShopCategoryNode {
     logo: typeof raw?.logo === 'string' ? raw.logo : null,
     index: typeof raw?.index === 'number' ? raw.index : undefined,
     path: typeof raw?.path === 'string' ? raw.path : undefined,
-    extra: raw?.extra,
+    extra,
     childrenList: children,
   }
 }
@@ -86,6 +97,29 @@ function normalizeSkuGroup(raw: any): StoreSkuCategoryGroup {
   }
 }
 
+type GroupHint = { id: number; name?: string }
+
+function buildDisplayGroups(apiGroups: StoreSkuCategoryGroup[], hints?: GroupHint[]): StoreSkuCategoryGroup[] {
+  if (!Array.isArray(hints) || hints.length === 0) return apiGroups
+  const map = new Map<number, StoreSkuCategoryGroup>()
+  for (const g of apiGroups) map.set(g.categoryId, g)
+  return hints
+    .map((h) => {
+      const id = Number(h?.id)
+      if (!Number.isFinite(id) || id <= 0) return null
+      const fromApi = map.get(id)
+      if (fromApi) return fromApi
+      return {
+        categoryId: id,
+        categoryName: normalizeText(h?.name) || String(id),
+        logo: null,
+        extra: undefined,
+        storeSkuModelList: [],
+      } as StoreSkuCategoryGroup
+    })
+    .filter((v): v is StoreSkuCategoryGroup => Boolean(v))
+}
+
 function skuToGoodsItem(sku: StoreSkuModel, group?: StoreSkuCategoryGroup): GoodsItem {
   return {
     id: normalizeText(sku.itemId || sku.skuId || sku.id),
@@ -130,6 +164,7 @@ export const useGoodsStore = defineStore('goods', {
     selectedCategoryId: undefined as number | undefined,
 
     goodsLoading: false,
+    apiSkuGroups: [] as StoreSkuCategoryGroup[],
     skuGroups: [] as StoreSkuCategoryGroup[],
     selectedGroupId: undefined as number | undefined,
     goods: [] as GoodsItem[],
@@ -147,6 +182,7 @@ export const useGoodsStore = defineStore('goods', {
       this.mode = mode === 'points' ? 'points' : 'normal'
       this.categories = []
       this.selectedCategoryId = undefined
+      this.apiSkuGroups = []
       this.skuGroups = []
       this.selectedGroupId = undefined
       this.goods = []
@@ -230,7 +266,13 @@ export const useGoodsStore = defineStore('goods', {
         this.categoriesLoading = false
       }
     },
-    async loadGoodsByCategory(token: string, frontCategoryId: number, pageNo = 1, pageSize = 500) {
+    async loadGoodsByCategory(
+      token: string,
+      frontCategoryId: number,
+      pageNo = 1,
+      pageSize = 500,
+      groupHints?: GroupHint[],
+    ) {
       const cid = Number(frontCategoryId)
       if (!Number.isFinite(cid)) throw new Error('分类ID不正确')
 
@@ -245,12 +287,13 @@ export const useGoodsStore = defineStore('goods', {
             promotionRender: false,
           })
           const normalizedGroups = Array.isArray(groups) ? groups.map(normalizeSkuGroup) : []
-          this.skuGroups = normalizedGroups
+          this.apiSkuGroups = normalizedGroups
+          this.skuGroups = buildDisplayGroups(normalizedGroups, groupHints)
           this.goods = normalizedGroups.flatMap((g) => g.storeSkuModelList.map((sku) => skuToPointsGoodsItem(sku, g)))
 
           const groupExists =
             typeof this.selectedGroupId === 'number' &&
-            normalizedGroups.some((g) => g.categoryId === this.selectedGroupId)
+            this.skuGroups.some((g) => g.categoryId === this.selectedGroupId)
           if (!groupExists) this.selectedGroupId = undefined
         } else {
           if (!this.locationReady) throw new Error('缺少经纬度，请先选择收货地址')
@@ -263,12 +306,13 @@ export const useGoodsStore = defineStore('goods', {
             isFinish: true,
           })
           const normalizedGroups = Array.isArray(groups) ? groups.map(normalizeSkuGroup) : []
-          this.skuGroups = normalizedGroups
+          this.apiSkuGroups = normalizedGroups
+          this.skuGroups = buildDisplayGroups(normalizedGroups, groupHints)
           this.goods = normalizedGroups.flatMap((g) => g.storeSkuModelList.map((sku) => skuToGoodsItem(sku, g)))
 
           const groupExists =
             typeof this.selectedGroupId === 'number' &&
-            normalizedGroups.some((g) => g.categoryId === this.selectedGroupId)
+            this.skuGroups.some((g) => g.categoryId === this.selectedGroupId)
           if (!groupExists) this.selectedGroupId = undefined
         }
       } finally {
