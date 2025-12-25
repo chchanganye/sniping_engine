@@ -59,23 +59,25 @@ func (e *Engine) startCaptchaPoolMaintainer(ctx context.Context) {
 	if e == nil {
 		return
 	}
-	e.captchaPoolMaintainer.Do(func() {
-		e.wg.Add(1)
-		go func() {
-			defer e.wg.Done()
-			ticker := time.NewTicker(800 * time.Millisecond)
-			defer ticker.Stop()
+	if !e.captchaPoolMaintainerRunning.CompareAndSwap(false, true) {
+		return
+	}
+	e.wg.Add(1)
+	go func() {
+		defer e.wg.Done()
+		defer e.captchaPoolMaintainerRunning.Store(false)
+		ticker := time.NewTicker(800 * time.Millisecond)
+		defer ticker.Stop()
 
-			for {
-				select {
-				case <-ctx.Done():
-					return
-				case <-ticker.C:
-					e.tickCaptchaPool(ctx)
-				}
+		for {
+			select {
+			case <-ctx.Done():
+				return
+			case <-ticker.C:
+				e.tickCaptchaPool(ctx)
 			}
-		}()
-	})
+		}
+	}()
 }
 
 func (e *Engine) tickCaptchaPool(ctx context.Context) {

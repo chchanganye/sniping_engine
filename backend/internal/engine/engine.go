@@ -40,16 +40,19 @@ type Engine struct {
 
 	captchaPoolActivateAtMs atomic.Int64
 	captchaPoolActivated    atomic.Bool
-	captchaPoolMaintainer   sync.Once
+	captchaPoolMaintainerRunning atomic.Bool
 
 	mu      sync.Mutex
 	running bool
+	runCtx  context.Context
 	cancel  context.CancelFunc
 	wg      sync.WaitGroup
 	states  map[string]*model.TaskState
 
 	accounts []model.Account
 	targets  []model.Target
+	targetCancels   map[string]context.CancelFunc
+	targetSnapshots map[string]model.Target
 
 	globalLimiter *rate.Limiter
 	perLimiter    map[string]*rate.Limiter
@@ -108,6 +111,8 @@ func New(opts Options) *Engine {
 		task:          opts.Task,
 		captchaPool:   NewCaptchaPool(DefaultCaptchaPoolSettings()),
 		states:        make(map[string]*model.TaskState),
+		targetCancels: make(map[string]context.CancelFunc),
+		targetSnapshots: make(map[string]model.Target),
 		perLimiter:    make(map[string]*rate.Limiter),
 		inFlight:      make(chan struct{}, maxInFlight),
 		accountLocks:  make(map[string]chan struct{}),
@@ -128,6 +133,7 @@ func (e *Engine) StartAll(ctx context.Context) error {
 	e.running = true
 	runCtx, cancel := context.WithCancel(context.Background())
 	e.cancel = cancel
+	e.runCtx = runCtx
 	e.mu.Unlock()
 
 	if e.bus != nil {
@@ -166,6 +172,8 @@ func (e *Engine) StartAll(ctx context.Context) error {
 	e.mu.Lock()
 	e.accounts = accounts
 	e.targets = targets
+	e.targetCancels = make(map[string]context.CancelFunc)
+	e.targetSnapshots = make(map[string]model.Target)
 	e.perLimiter = make(map[string]*rate.Limiter)
 	e.accountLocks = make(map[string]chan struct{})
 	for _, acc := range accounts {
@@ -181,8 +189,14 @@ func (e *Engine) StartAll(ctx context.Context) error {
 		}
 		e.states[t.ID] = state
 		e.publishStateLocked(*state)
+		targetCtx, targetCancel := context.WithCancel(runCtx)
+		e.targetCancels[t.ID] = targetCancel
+		e.targetSnapshots[t.ID] = t
 		e.wg.Add(1)
-		go e.runTarget(runCtx, t)
+		go func(tctx context.Context, tt model.Target) {
+			defer e.wg.Done()
+			e.runTarget(tctx, tt)
+		}(targetCtx, t)
 	}
 	e.mu.Unlock()
 
@@ -195,6 +209,9 @@ func (e *Engine) StopAll(ctx context.Context) error {
 	e.mu.Lock()
 	cancel := e.cancel
 	e.cancel = nil
+	e.runCtx = nil
+	e.targetCancels = make(map[string]context.CancelFunc)
+	e.targetSnapshots = make(map[string]model.Target)
 	wasRunning := e.running
 	e.running = false
 	e.mu.Unlock()

@@ -97,6 +97,18 @@ async function testBuy(row: Task) {
   }
 }
 
+async function onEnabledChange(row: Task, value: boolean) {
+  const prev = !value
+  row.enabled = value
+  try {
+    await tasksStore.updateTask(row.id, { enabled: value })
+    await refreshAll(false)
+  } catch (e) {
+    row.enabled = prev
+    ElMessage.error(e instanceof Error ? e.message : '更新失败')
+  }
+}
+
 function onRushAtChange(row: Task, value: Date | null) {
   const ms = value instanceof Date ? value.getTime() : undefined
   row.rushAtMs = ms
@@ -260,8 +272,7 @@ function statusMeta(row: Task) {
           <template #default="{ row }">
             <el-switch
               v-model="row.enabled"
-              :disabled="engineRunning"
-              @change="() => tasksStore.updateTask(row.id, { enabled: row.enabled })"
+              @change="(v: boolean) => onEnabledChange(row, v)"
             />
           </template>
         </el-table-column>

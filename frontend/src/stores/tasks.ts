@@ -214,26 +214,12 @@ export const useTasksStore = defineStore('tasks', {
     async setAllEnabled(enabled: boolean) {
       this.engineLoading = true
       try {
-        // 引擎只在启动时读取“已启用任务”，因此这里用“停止 -> 批量更新 ->（可选）启动”确保生效
-        const wasRunning = Boolean(this.engine?.running)
-        if (wasRunning) {
-          await beEngineStop().catch(() => null)
-        }
-
         for (const t of this.tasks) {
           if (t.enabled === enabled) continue
           await this.updateTask(t.id, { enabled })
         }
 
         await this.refresh()
-
-        if (enabled) {
-          await beEngineStart()
-          this.engine = await beEngineState()
-          await this.refresh()
-        } else {
-          this.engine = await beEngineState().catch(() => ({ running: false, tasks: [] }))
-        }
       } finally {
         this.engineLoading = false
       }

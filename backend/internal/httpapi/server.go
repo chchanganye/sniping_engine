@@ -349,6 +349,19 @@ func (s *Server) handleTargets(w http.ResponseWriter, r *http.Request) {
 			writeJSON(w, http.StatusBadRequest, map[string]any{"error": err.Error()})
 			return
 		}
+
+		// 单个任务开关变化也要立即生效：自动启动/停止引擎并同步任务列表。
+		if s.engine != nil {
+			syncCtx, cancel := context.WithTimeout(r.Context(), 3*time.Second)
+			if err := s.engine.AutoRunByStore(syncCtx); err != nil && s.bus != nil {
+				s.bus.Log("warn", "任务变更后同步引擎失败", map[string]any{
+					"targetId": t.ID,
+					"error":    err.Error(),
+				})
+			}
+			cancel()
+		}
+
 		writeJSON(w, http.StatusOK, map[string]any{"data": t})
 	case http.MethodDelete:
 		id := r.URL.Query().Get("id")
@@ -359,6 +372,16 @@ func (s *Server) handleTargets(w http.ResponseWriter, r *http.Request) {
 		if err := s.store.DeleteTarget(r.Context(), id); err != nil {
 			writeJSON(w, http.StatusInternalServerError, map[string]any{"error": err.Error()})
 			return
+		}
+		if s.engine != nil {
+			syncCtx, cancel := context.WithTimeout(r.Context(), 3*time.Second)
+			if err := s.engine.AutoRunByStore(syncCtx); err != nil && s.bus != nil {
+				s.bus.Log("warn", "删除任务后同步引擎失败", map[string]any{
+					"targetId": id,
+					"error":    err.Error(),
+				})
+			}
+			cancel()
 		}
 		writeJSON(w, http.StatusOK, map[string]any{"ok": true})
 	default:
