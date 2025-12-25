@@ -74,6 +74,8 @@ func (s *Server) Handler() http.Handler {
 	api.HandleFunc("/api/v1/captcha/state", s.handleCaptchaState)
 	api.HandleFunc("/api/v1/captcha/pool", s.handleCaptchaPool)
 	api.HandleFunc("/api/v1/captcha/pool/fill", s.handleCaptchaPoolFill)
+	api.HandleFunc("/api/v1/captcha/pages", s.handleCaptchaPages)
+	api.HandleFunc("/api/v1/captcha/pages/refresh", s.handleCaptchaPagesRefresh)
 	api.HandleFunc("/api/v1/settings/email", s.handleEmailSettings)
 	api.HandleFunc("/api/v1/settings/email/test", s.handleEmailTest)
 	api.HandleFunc("/api/v1/settings/limits", s.handleLimitsSettings)
@@ -134,12 +136,50 @@ func (s *Server) handleCaptchaPoolFill(w http.ResponseWriter, r *http.Request) {
 	if count > 50 {
 		count = 50
 	}
-	added, failed, err := s.engine.FillCaptchaPool(r.Context(), count)
+	added, failed, err := s.engine.FillCaptchaPoolManual(r.Context(), count)
 	if err != nil {
 		writeJSON(w, http.StatusInternalServerError, map[string]any{"error": err.Error()})
 		return
 	}
 	writeJSON(w, http.StatusOK, map[string]any{"data": map[string]any{"added": added, "failed": failed}})
+}
+
+func (s *Server) handleCaptchaPages(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		writeJSON(w, http.StatusMethodNotAllowed, map[string]any{"error": "method not allowed"})
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"data": utils.GetCaptchaPagesStatus()})
+}
+
+type captchaPagesRefreshPayload struct {
+	ForceRecreate bool `json:"forceRecreate,omitempty"`
+	EnsurePages   *int `json:"ensurePages,omitempty"`
+}
+
+func (s *Server) handleCaptchaPagesRefresh(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		writeJSON(w, http.StatusMethodNotAllowed, map[string]any{"error": "method not allowed"})
+		return
+	}
+	var body captchaPagesRefreshPayload
+	if err := readJSON(r, &body); err != nil {
+		writeJSON(w, http.StatusBadRequest, map[string]any{"error": err.Error()})
+		return
+	}
+	ensure := 0
+	if body.EnsurePages != nil {
+		ensure = *body.EnsurePages
+	}
+	res, err := utils.RefreshCaptchaPages(r.Context(), utils.CaptchaPagesRefreshOptions{
+		ForceRecreate: body.ForceRecreate,
+		EnsurePages:   ensure,
+	})
+	if err != nil {
+		writeJSON(w, http.StatusInternalServerError, map[string]any{"error": err.Error()})
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"data": res})
 }
 
 func (s *Server) handleAccounts(w http.ResponseWriter, r *http.Request) {

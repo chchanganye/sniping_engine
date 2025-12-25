@@ -148,6 +148,28 @@ func (e *Engine) recalcCaptchaPoolActivateAtMs() {
 }
 
 func (e *Engine) FillCaptchaPool(ctx context.Context, count int) (added int, failed int, err error) {
+	return e.fillCaptchaPool(ctx, count, false)
+}
+
+func (e *Engine) FillCaptchaPoolManual(ctx context.Context, count int) (added int, failed int, err error) {
+	if e != nil && e.bus != nil {
+		e.bus.Log("info", "验证码池：手动补充开始", map[string]any{"count": count})
+	}
+	added, failed, err = e.fillCaptchaPool(ctx, count, true)
+	if e != nil && e.bus != nil {
+		fields := map[string]any{"added": added, "failed": failed}
+		if err != nil {
+			fields["error"] = err.Error()
+			e.bus.Log("warn", "验证码池：手动补充失败", fields)
+		} else {
+			fields["size"] = e.captchaPool.Size(time.Now().UnixMilli())
+			e.bus.Log("info", "验证码池：手动补充完成", fields)
+		}
+	}
+	return added, failed, err
+}
+
+func (e *Engine) fillCaptchaPool(ctx context.Context, count int, manual bool) (added int, failed int, err error) {
 	if e == nil || e.captchaPool == nil {
 		return 0, 0, errors.New("engine unavailable")
 	}
@@ -160,6 +182,20 @@ func (e *Engine) FillCaptchaPool(ctx context.Context, count int) (added int, fai
 
 	if _, err := utils.EnsureCaptchaEngineReady(ctx, 0); err != nil {
 		return 0, 0, err
+	}
+
+	desiredPages := utils.GetCaptchaMaxConcurrent()
+	if desiredPages <= 0 {
+		desiredPages = 1
+	}
+	if desiredPages > count {
+		desiredPages = count
+	}
+	if err := utils.EnsureCaptchaPagePool(ctx, desiredPages); err != nil {
+		return 0, 0, err
+	}
+	if manual {
+		_, _ = utils.RefreshCaptchaPages(ctx, utils.CaptchaPagesRefreshOptions{EnsurePages: desiredPages})
 	}
 
 	dracoToken, _ := e.pickDracoToken(ctx)
@@ -211,13 +247,6 @@ func (e *Engine) FillCaptchaPool(ctx context.Context, count int) (added int, fai
 		}
 	}
 
-	if e.bus != nil {
-		e.bus.Log("info", "验证码池：补充完成", map[string]any{
-			"added":  added,
-			"failed": failed,
-			"size":   e.captchaPool.Size(time.Now().UnixMilli()),
-		})
-	}
 	return added, failed, nil
 }
 

@@ -85,11 +85,34 @@ export interface CaptchaEngineStatus {
   lastError?: string
   warmPages?: number
   pagePoolSize?: number
+  totalPages?: number
+  idlePages?: number
+  busyPages?: number
+  refreshingPages?: number
   solveCount?: number
   totalSolveMs?: number
   lastSolveAtMs?: number
   lastSolveMs?: number
   lastAttempts?: number
+}
+
+export interface CaptchaPageInfo {
+  id: string
+  state: 'idle' | 'busy' | 'refreshing' | 'unknown'
+  createdAtMs: number
+  lastUsedAtMs: number
+  lastOpenedAtMs: number
+  lastError?: string
+}
+
+export interface CaptchaPagesStatus {
+  nowMs: number
+  total: number
+  idle: number
+  busy: number
+  refreshing: number
+  pagePool: number
+  pages: CaptchaPageInfo[]
 }
 
 export interface CaptchaPoolSettings {
@@ -230,6 +253,16 @@ export async function beCaptchaPoolStatus(): Promise<CaptchaPoolStatus> {
 
 export async function beCaptchaPoolFill(count: number): Promise<{ added: number; failed: number }> {
   const resp = await http.post<DataEnvelope<{ added: number; failed: number }>>('/api/v1/captcha/pool/fill', { count })
+  return resp.data.data
+}
+
+export async function beCaptchaPagesStatus(): Promise<CaptchaPagesStatus> {
+  const resp = await http.get<DataEnvelope<CaptchaPagesStatus>>('/api/v1/captcha/pages')
+  return resp.data.data
+}
+
+export async function beCaptchaPagesRefresh(payload?: { forceRecreate?: boolean; ensurePages?: number }): Promise<{ refreshed: number; recreated: number; failed: number }> {
+  const resp = await http.post<DataEnvelope<{ refreshed: number; recreated: number; failed: number }>>('/api/v1/captcha/pages/refresh', payload ?? {})
   return resp.data.data
 }
 

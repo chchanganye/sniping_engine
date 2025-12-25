@@ -52,12 +52,46 @@ type CaptchaEngineStatus struct {
 	LastError     string             `json:"lastError,omitempty"`
 	WarmPages     int                `json:"warmPages"`
 	PagePoolSize  int                `json:"pagePoolSize"`
+	TotalPages    int                `json:"totalPages"`
+	IdlePages     int                `json:"idlePages"`
+	BusyPages     int                `json:"busyPages"`
+	Refreshing    int                `json:"refreshingPages"`
 	SolveCount    int64              `json:"solveCount"`
 	TotalSolveMs  int64              `json:"totalSolveMs"`
 	LastSolveAtMs int64              `json:"lastSolveAtMs"`
 	LastSolveMs   int64              `json:"lastSolveMs"`
 	LastAttempts  int64              `json:"lastAttempts"`
 	GoRoutines    int                `json:"goRoutines"`
+}
+
+type CaptchaPageInfo struct {
+	ID             string `json:"id"`
+	State          string `json:"state"`
+	CreatedAtMs    int64  `json:"createdAtMs"`
+	LastUsedAtMs   int64  `json:"lastUsedAtMs"`
+	LastOpenedAtMs int64  `json:"lastOpenedAtMs"`
+	LastError      string `json:"lastError,omitempty"`
+}
+
+type CaptchaPagesStatus struct {
+	NowMs       int64             `json:"nowMs"`
+	Total       int               `json:"total"`
+	Idle        int               `json:"idle"`
+	Busy        int               `json:"busy"`
+	Refreshing  int               `json:"refreshing"`
+	PagePool    int               `json:"pagePool"`
+	Pages       []CaptchaPageInfo `json:"pages"`
+}
+
+type CaptchaPagesRefreshOptions struct {
+	ForceRecreate bool
+	EnsurePages   int
+}
+
+type CaptchaPagesRefreshResult struct {
+	Refreshed int `json:"refreshed"`
+	Recreated int `json:"recreated"`
+	Failed    int `json:"failed"`
 }
 
 type CaptchaSolveMetrics struct {
@@ -193,9 +227,57 @@ var (
 )
 
 type captchaPage struct {
+	id          string
+	createdAtMs int64
+
 	incognito *rod.Browser
 	page      *rod.Page
+
+	state          atomic.Int32 // 0=idle 1=busy 2=refreshing
+	lastUsedAtMs   atomic.Int64
+	lastOpenedAtMs atomic.Int64
+	lastError      atomic.Value // string
 }
+
+const (
+	captchaPageStateIdle int32 = iota
+	captchaPageStateBusy
+	captchaPageStateRefreshing
+)
+
+func (cp *captchaPage) stateString() string {
+	if cp == nil {
+		return "unknown"
+	}
+	switch cp.state.Load() {
+	case captchaPageStateIdle:
+		return "idle"
+	case captchaPageStateBusy:
+		return "busy"
+	case captchaPageStateRefreshing:
+		return "refreshing"
+	default:
+		return "unknown"
+	}
+}
+
+func (cp *captchaPage) lastErrorString() string {
+	if cp == nil {
+		return ""
+	}
+	v := cp.lastError.Load()
+	if v == nil {
+		return ""
+	}
+	s, _ := v.(string)
+	return strings.TrimSpace(s)
+}
+
+var (
+	captchaPagesMu  sync.Mutex
+	captchaPagesAll []*captchaPage
+	captchaPageSeq  atomic.Uint64
+)
 
 func closeChanSafe(ch chan struct{}) {
 	defer func() { _ = recover() }()
@@ -244,6 +326,25 @@ func GetCaptchaEngineStatus() CaptchaEngineStatus {
 	poolSize := len(captchaPagePool)
 	captchaPagePoolMu.Unlock()
 
+	captchaPagesMu.Lock()
+	all := make([]*captchaPage, len(captchaPagesAll))
+	copy(all, captchaPagesAll)
+	captchaPagesMu.Unlock()
+
+	idle := 0
+	busy := 0
+	refreshing := 0
+	for _, p := range all {
+		switch p.state.Load() {
+		case captchaPageStateIdle:
+			idle++
+		case captchaPageStateBusy:
+			busy++
+		case captchaPageStateRefreshing:
+			refreshing++
+		}
+	}
+
 	captchaEngineMu.RLock()
 	state := captchaEngineState
 	startedAt := captchaEngineStarted
@@ -259,6 +360,10 @@ func GetCaptchaEngineStatus() CaptchaEngineStatus {
 		LastError:     lastErr,
 		WarmPages:     warm,
 		PagePoolSize:  poolSize,
+		TotalPages:    len(all),
+		IdlePages:     idle,
+		BusyPages:     busy,
+		Refreshing:    refreshing,
 		SolveCount:    captchaSolveCount.Load(),
 		TotalSolveMs:  captchaSolveTotalMs.Load(),
 		LastSolveAtMs: captchaLastSolveAtMs.Load(),
@@ -387,10 +492,14 @@ func WarmupCaptchaEngine(maxWarmPages int) error {
 		}
 		if err := navigateCaptchaPage(page, aliyunCaptchaTargetURL); err != nil {
 			pageCancel()
-			releaseCaptchaPage(cp)
+			discardCaptchaPage(cp)
 			SetCaptchaEngineState(CaptchaEngineStateError, err.Error(), warmPages)
 			return err
 		}
+		nowMs := time.Now().UnixMilli()
+		cp.lastOpenedAtMs.Store(nowMs)
+		cp.lastUsedAtMs.Store(nowMs)
+		cp.lastError.Store("")
 		pageCancel()
 		releaseCaptchaPage(cp)
 	}
@@ -405,8 +514,17 @@ func CloseCaptchaBrowser() error {
 	defer captchaBrowserMu.Unlock()
 
 	var firstErr error
+	captchaPagesMu.Lock()
+	all := make([]*captchaPage, len(captchaPagesAll))
+	copy(all, captchaPagesAll)
+	captchaPagesAll = nil
+	captchaPagesMu.Unlock()
+
 	captchaPagePoolMu.Lock()
-	for _, p := range captchaPagePool {
+	captchaPagePool = nil
+	captchaPagePoolMu.Unlock()
+
+	for _, p := range all {
 		if p == nil {
 			continue
 		}
@@ -417,8 +535,6 @@ func CloseCaptchaBrowser() error {
 			_ = p.incognito.Close()
 		}
 	}
-	captchaPagePool = nil
-	captchaPagePoolMu.Unlock()
 
 	if captchaBrowser != nil {
 		if err := captchaBrowser.Close(); err != nil && firstErr == nil {
@@ -577,23 +693,229 @@ func drainStringChan(ch chan string) {
 	}
 }
 
-func acquireCaptchaPage(ctx context.Context) (*captchaPage, *rod.Page, error) {
+func GetCaptchaMaxConcurrent() int {
+	return getCaptchaMaxConcurrent()
+}
+
+func GetCaptchaPagesStatus() CaptchaPagesStatus {
+	nowMs := time.Now().UnixMilli()
+
+	captchaPagesMu.Lock()
+	all := make([]*captchaPage, len(captchaPagesAll))
+	copy(all, captchaPagesAll)
+	captchaPagesMu.Unlock()
+
 	captchaPagePoolMu.Lock()
-	n := len(captchaPagePool)
-	if n > 0 {
-		cp := captchaPagePool[n-1]
-		captchaPagePool = captchaPagePool[:n-1]
-		captchaPagePoolMu.Unlock()
-		if cp != nil && cp.page != nil {
-			p := cp.page.Context(ctx)
-			_ = proto.NetworkEnable{}.Call(p)
-			_ = proto.NetworkSetCacheDisabled{CacheDisabled: true}.Call(p)
-			return cp, p, nil
-		}
-	} else {
-		captchaPagePoolMu.Unlock()
+	poolSize := len(captchaPagePool)
+	captchaPagePoolMu.Unlock()
+
+	out := CaptchaPagesStatus{
+		NowMs:    nowMs,
+		PagePool: poolSize,
+		Pages:    make([]CaptchaPageInfo, 0, len(all)),
 	}
 
+	for _, cp := range all {
+		if cp == nil {
+			continue
+		}
+		switch cp.state.Load() {
+		case captchaPageStateIdle:
+			out.Idle++
+		case captchaPageStateBusy:
+			out.Busy++
+		case captchaPageStateRefreshing:
+			out.Refreshing++
+		}
+		out.Pages = append(out.Pages, CaptchaPageInfo{
+			ID:             cp.id,
+			State:          cp.stateString(),
+			CreatedAtMs:    cp.createdAtMs,
+			LastUsedAtMs:   cp.lastUsedAtMs.Load(),
+			LastOpenedAtMs: cp.lastOpenedAtMs.Load(),
+			LastError:      cp.lastErrorString(),
+		})
+	}
+	out.Total = len(out.Pages)
+	return out
+}
+
+func EnsureCaptchaPagePool(ctx context.Context, ensureTotalPages int) error {
+	if ensureTotalPages <= 0 {
+		return nil
+	}
+	if ensureTotalPages > 20 {
+		ensureTotalPages = 20
+	}
+
+	captchaPagesMu.Lock()
+	currentTotal := len(captchaPagesAll)
+	captchaPagesMu.Unlock()
+
+	missing := ensureTotalPages - currentTotal
+	if missing <= 0 {
+		return nil
+	}
+
+	for i := 0; i < missing; i++ {
+		pageCtx, cancel := context.WithTimeout(ctx, 25*time.Second)
+		cp, page, err := newCaptchaPage(pageCtx)
+		if err != nil {
+			cancel()
+			return err
+		}
+		if err := navigateCaptchaPage(page, aliyunCaptchaTargetURL); err != nil {
+			cancel()
+			discardCaptchaPage(cp)
+			return err
+		}
+		nowMs := time.Now().UnixMilli()
+		cp.lastOpenedAtMs.Store(nowMs)
+		cp.lastUsedAtMs.Store(nowMs)
+		cp.lastError.Store("")
+		releaseCaptchaPage(cp)
+		cancel()
+	}
+	return nil
+}
+
+func RefreshCaptchaPages(ctx context.Context, opts CaptchaPagesRefreshOptions) (CaptchaPagesRefreshResult, error) {
+	var res CaptchaPagesRefreshResult
+	if opts.EnsurePages > 0 {
+		if err := EnsureCaptchaPagePool(ctx, opts.EnsurePages); err != nil {
+			return res, err
+		}
+	}
+
+	captchaPagePoolMu.Lock()
+	toRefresh := make([]*captchaPage, len(captchaPagePool))
+	copy(toRefresh, captchaPagePool)
+	captchaPagePool = nil
+	captchaPagePoolMu.Unlock()
+
+	if len(toRefresh) == 0 {
+		return res, nil
+	}
+
+	for _, cp := range toRefresh {
+		if cp == nil || cp.page == nil {
+			continue
+		}
+		cp.state.Store(captchaPageStateRefreshing)
+	}
+
+	for _, cp := range toRefresh {
+		if cp == nil || cp.page == nil {
+			continue
+		}
+
+		if opts.ForceRecreate {
+			discardCaptchaPage(cp)
+			pageCtx, cancel := context.WithTimeout(ctx, 25*time.Second)
+			ncp, page, err := newCaptchaPage(pageCtx)
+			if err != nil {
+				cancel()
+				res.Failed++
+				continue
+			}
+			if err := navigateCaptchaPage(page, aliyunCaptchaTargetURL); err != nil {
+				cancel()
+				discardCaptchaPage(ncp)
+				res.Failed++
+				continue
+			}
+			nowMs := time.Now().UnixMilli()
+			ncp.lastOpenedAtMs.Store(nowMs)
+			ncp.lastUsedAtMs.Store(nowMs)
+			ncp.lastError.Store("")
+			releaseCaptchaPage(ncp)
+			cancel()
+			res.Recreated++
+			continue
+		}
+
+		pageCtx, cancel := context.WithTimeout(ctx, 12*time.Second)
+		p := cp.page.Context(pageCtx)
+		err := navigateCaptchaPage(p, aliyunCaptchaTargetURL)
+		cancel()
+		if err != nil {
+			cp.lastError.Store(err.Error())
+			discardCaptchaPage(cp)
+			pageCtx2, cancel2 := context.WithTimeout(ctx, 25*time.Second)
+			ncp, page, err2 := newCaptchaPage(pageCtx2)
+			if err2 != nil {
+				cancel2()
+				res.Failed++
+				continue
+			}
+			if err2 := navigateCaptchaPage(page, aliyunCaptchaTargetURL); err2 != nil {
+				cancel2()
+				discardCaptchaPage(ncp)
+				res.Failed++
+				continue
+			}
+			nowMs := time.Now().UnixMilli()
+			ncp.lastOpenedAtMs.Store(nowMs)
+			ncp.lastUsedAtMs.Store(nowMs)
+			ncp.lastError.Store("")
+			releaseCaptchaPage(ncp)
+			cancel2()
+			res.Recreated++
+			continue
+		}
+
+		nowMs := time.Now().UnixMilli()
+		cp.lastOpenedAtMs.Store(nowMs)
+		cp.lastUsedAtMs.Store(nowMs)
+		cp.lastError.Store("")
+		releaseCaptchaPage(cp)
+		res.Refreshed++
+	}
+
+	return res, nil
+}
+
+func registerCaptchaPage(cp *captchaPage) {
+	if cp == nil {
+		return
+	}
+	captchaPagesMu.Lock()
+	captchaPagesAll = append(captchaPagesAll, cp)
+	captchaPagesMu.Unlock()
+}
+
+func removeCaptchaPage(cp *captchaPage) {
+	if cp == nil {
+		return
+	}
+	captchaPagesMu.Lock()
+	defer captchaPagesMu.Unlock()
+	for i, p := range captchaPagesAll {
+		if p == cp {
+			copy(captchaPagesAll[i:], captchaPagesAll[i+1:])
+			captchaPagesAll = captchaPagesAll[:len(captchaPagesAll)-1]
+			return
+		}
+	}
+}
+
+func discardCaptchaPage(cp *captchaPage) {
+	if cp == nil {
+		return
+	}
+	removeCaptchaPage(cp)
+	if cp.page != nil {
+		_ = cp.page.Close()
+	}
+	if cp.incognito != nil {
+		_ = cp.incognito.Close()
+	}
+	cp.page = nil
+	cp.incognito = nil
+	cp.state.Store(captchaPageStateIdle)
+}
+
+func newCaptchaPage(ctx context.Context) (*captchaPage, *rod.Page, error) {
 	mainBrowser, err := getCaptchaBrowser()
 	if err != nil {
 		return nil, nil, err
@@ -613,11 +935,46 @@ func acquireCaptchaPage(ctx context.Context) (*captchaPage, *rod.Page, error) {
 		return nil, nil, err
 	}
 
-	cp := &captchaPage{incognito: incognito, page: page}
+	nowMs := time.Now().UnixMilli()
+	cp := &captchaPage{
+		id:          fmt.Sprintf("p-%d", captchaPageSeq.Add(1)),
+		createdAtMs: nowMs,
+		incognito:   incognito,
+		page:        page,
+	}
+	cp.state.Store(captchaPageStateBusy)
+	cp.lastUsedAtMs.Store(nowMs)
+	cp.lastOpenedAtMs.Store(0)
+	cp.lastError.Store("")
+	registerCaptchaPage(cp)
+
 	p := page.Context(ctx)
 	_ = proto.NetworkEnable{}.Call(p)
 	_ = proto.NetworkSetCacheDisabled{CacheDisabled: true}.Call(p)
 	return cp, p, nil
+}
+
+func acquireCaptchaPage(ctx context.Context) (*captchaPage, *rod.Page, error) {
+	captchaPagePoolMu.Lock()
+	n := len(captchaPagePool)
+	if n > 0 {
+		cp := captchaPagePool[n-1]
+		captchaPagePool = captchaPagePool[:n-1]
+		captchaPagePoolMu.Unlock()
+		if cp != nil && cp.page != nil {
+			nowMs := time.Now().UnixMilli()
+			cp.state.Store(captchaPageStateBusy)
+			cp.lastUsedAtMs.Store(nowMs)
+			p := cp.page.Context(ctx)
+			_ = proto.NetworkEnable{}.Call(p)
+			_ = proto.NetworkSetCacheDisabled{CacheDisabled: true}.Call(p)
+			return cp, p, nil
+		}
+	} else {
+		captchaPagePoolMu.Unlock()
+	}
+
+	return newCaptchaPage(ctx)
 }
 
 func releaseCaptchaPage(cp *captchaPage) {
@@ -626,6 +983,7 @@ func releaseCaptchaPage(cp *captchaPage) {
 	}
 
 	// 不再归还到 about:blank：保持页面“预打开”状态，降低抢购时的首次加载延迟。
+	cp.state.Store(captchaPageStateIdle)
 
 	captchaPagePoolMu.Lock()
 	captchaPagePool = append(captchaPagePool, cp)
@@ -766,7 +1124,7 @@ func SolveAliyunCaptchaWithContext(parent context.Context, timestamp int64, drac
 }
 
 func solveAliyunCaptchaWithMetrics(parent context.Context, timestamp int64, dracoToken string) (string, CaptchaSolveMetrics, error) {
-	rand.Seed(time.Now().UnixNano())
+	rng := rand.New(rand.NewSource(time.Now().UnixNano()))
 	started := time.Now()
 	metrics := CaptchaSolveMetrics{Attempts: 0, Duration: 0}
 
@@ -793,7 +1151,27 @@ func solveAliyunCaptchaWithMetrics(parent context.Context, timestamp int64, drac
 	if err != nil {
 		return "", metrics, err
 	}
-	defer releaseCaptchaPage(cp)
+	defer func() {
+		if cp == nil || cp.page == nil {
+			return
+		}
+		// 释放前尽量把页面“重置到可复用状态”，避免页面打开太久导致卡死/白屏。
+		// 注意：HijackRequests 会在本函数返回前 Stop（defer），这里再执行 Navigate 不会残留拦截器。
+		resetCtx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+		p := cp.page.Context(resetCtx)
+		err := navigateCaptchaPage(p, aliyunCaptchaTargetURL)
+		cancel()
+		if err != nil {
+			cp.lastError.Store(err.Error())
+			discardCaptchaPage(cp)
+			return
+		}
+		nowMs := time.Now().UnixMilli()
+		cp.lastOpenedAtMs.Store(nowMs)
+		cp.lastUsedAtMs.Store(nowMs)
+		cp.lastError.Store("")
+		releaseCaptchaPage(cp)
+	}()
 
 	// --- 状态 ---
 	var (
@@ -984,10 +1362,23 @@ func solveAliyunCaptchaWithMetrics(parent context.Context, timestamp int64, drac
 
 	// --- 打开页面：优先复用“已预打开”的页面，必要时再导航 ---
 	ensureCaptchaPageOpened := func() error {
-		if _, err := page.Timeout(500 * time.Millisecond).Element("#button"); err == nil {
-			return nil
+		lastOpenedAt := cp.lastOpenedAtMs.Load()
+		if lastOpenedAt > 0 && time.Since(time.UnixMilli(lastOpenedAt)) > 2*time.Minute {
+			// 页面打开太久：强制刷新唤醒，避免卡死/白屏。
+		} else {
+			if _, err := page.Timeout(500 * time.Millisecond).Element("#button"); err == nil {
+				return nil
+			}
 		}
-		return navigateCaptchaPage(page, makeTargetURL(1))
+		if err := navigateCaptchaPage(page, makeTargetURL(1)); err != nil {
+			cp.lastError.Store(err.Error())
+			return err
+		}
+		nowMs := time.Now().UnixMilli()
+		cp.lastOpenedAtMs.Store(nowMs)
+		cp.lastUsedAtMs.Store(nowMs)
+		cp.lastError.Store("")
+		return nil
 	}
 
 	if err := ensureCaptchaPageOpened(); err != nil {
@@ -1015,8 +1406,13 @@ func solveAliyunCaptchaWithMetrics(parent context.Context, timestamp int64, drac
 		if tryCount > 1 {
 			if err := navigateCaptchaPage(page, makeTargetURL(tryCount)); err != nil {
 				lastErr = err
+				cp.lastError.Store(err.Error())
 				continue
 			}
+			nowMs := time.Now().UnixMilli()
+			cp.lastOpenedAtMs.Store(nowMs)
+			cp.lastUsedAtMs.Store(nowMs)
+			cp.lastError.Store("")
 			pageSceneID = extractSceneID(page)
 		}
 
@@ -1049,7 +1445,7 @@ func solveAliyunCaptchaWithMetrics(parent context.Context, timestamp int64, drac
 			return "", metrics, errors.New("等待打码结果超时")
 		}
 
-		offset := (rand.Float64() * 0.2) - 0.1
+		offset := (rng.Float64() * 0.2) - 0.1
 		finalDistance := apiX + SlideOffset + offset
 
 		// 获取起点（滑块中心点）。
@@ -1117,7 +1513,7 @@ func solveAliyunCaptchaWithMetrics(parent context.Context, timestamp int64, drac
 			}
 			currentMouseX += moveStep
 
-			randomY := startY + (rand.Float64()*2 - 1)
+			randomY := startY + (rng.Float64()*2 - 1)
 			page.Mouse.MustMoveTo(currentMouseX, randomY)
 			captchaSleep(80*time.Millisecond, 40*time.Millisecond)
 		}
@@ -1164,14 +1560,18 @@ func solveAliyunCaptchaWithMetrics(parent context.Context, timestamp int64, drac
 }
 
 // 生成贝塞尔曲线轨迹。
-func generateBezierTrack(startX, startY, endX, endY float64, steps int) []Point {
+func generateBezierTrack(rng *rand.Rand, startX, startY, endX, endY float64, steps int) []Point {
 	var track []Point
 
 	cx1 := startX + (endX-startX)/4
-	cy1 := startY + (rand.Float64()-0.5)*2
+	rr := rng
+	if rr == nil {
+		rr = rand.New(rand.NewSource(time.Now().UnixNano()))
+	}
+	cy1 := startY + (rr.Float64()-0.5)*2
 
 	cx2 := startX + (endX-startX)*3/4
-	cy2 := startY + (rand.Float64()-0.5)*2
+	cy2 := startY + (rr.Float64()-0.5)*2
 
 	for i := 0; i <= steps; i++ {
 		t := float64(i) / float64(steps)
@@ -1191,11 +1591,15 @@ func generateBezierTrack(startX, startY, endX, endY float64, steps int) []Point 
 }
 
 // 执行轨迹移动。
-func executeTrack(page *rod.Page, track []Point) {
+func executeTrack(rng *rand.Rand, page *rod.Page, track []Point) {
+	rr := rng
+	if rr == nil {
+		rr = rand.New(rand.NewSource(time.Now().UnixNano()))
+	}
 	for _, p := range track {
 		page.Mouse.MustMoveTo(p.X, p.Y)
-		if rand.Intn(10) > 7 {
-			time.Sleep(time.Duration(1+rand.Intn(2)) * time.Millisecond)
+		if rr.Intn(10) > 7 {
+			time.Sleep(time.Duration(1+rr.Intn(2)) * time.Millisecond)
 		}
 	}
 }

@@ -2,11 +2,22 @@
 import { computed, onMounted, onUnmounted, ref } from 'vue'
 import { ElMessage } from 'element-plus'
 import dayjs from 'dayjs'
-import { beCaptchaPoolFill, beCaptchaPoolStatus, type CaptchaPoolItemView, type CaptchaPoolStatus } from '@/services/backend'
+import {
+  beCaptchaPagesRefresh,
+  beCaptchaPagesStatus,
+  beCaptchaPoolFill,
+  beCaptchaPoolStatus,
+  type CaptchaPageInfo,
+  type CaptchaPagesStatus,
+  type CaptchaPoolItemView,
+  type CaptchaPoolStatus,
+} from '@/services/backend'
 
 const loading = ref(false)
 const filling = ref(false)
+const refreshingPages = ref(false)
 const status = ref<CaptchaPoolStatus | null>(null)
+const pages = ref<CaptchaPagesStatus | null>(null)
 const nowMs = ref(Date.now())
 const addCount = ref(2)
 
@@ -14,10 +25,25 @@ let pollTimer: number | undefined
 let clockTimer: number | undefined
 
 const items = computed<CaptchaPoolItemView[]>(() => status.value?.items ?? [])
+const pageList = computed<CaptchaPageInfo[]>(() => pages.value?.pages ?? [])
 
 function formatMs(ms?: number): string {
   if (!ms) return '-'
   return dayjs(ms).format('YYYY-MM-DD HH:mm:ss')
+}
+
+function pageStateText(s: string): string {
+  if (s === 'busy') return '获取中'
+  if (s === 'idle') return '待机'
+  if (s === 'refreshing') return '刷新中'
+  return '未知'
+}
+
+function pageStateTagType(s: string): 'success' | 'warning' | 'info' | 'danger' {
+  if (s === 'busy') return 'warning'
+  if (s === 'idle') return 'success'
+  if (s === 'refreshing') return 'info'
+  return 'danger'
 }
 
 function leftSeconds(expiresAtMs: number): number {
@@ -29,11 +55,26 @@ function leftSeconds(expiresAtMs: number): number {
 async function load() {
   loading.value = true
   try {
-    status.value = await beCaptchaPoolStatus()
+    const [pool, pageStatus] = await Promise.all([beCaptchaPoolStatus(), beCaptchaPagesStatus()])
+    status.value = pool
+    pages.value = pageStatus
   } catch (e) {
     ElMessage.error(e instanceof Error ? e.message : '加载失败')
   } finally {
     loading.value = false
+  }
+}
+
+async function refreshPagePool() {
+  refreshingPages.value = true
+  try {
+    const res = await beCaptchaPagesRefresh()
+    ElMessage.success(`已刷新：${res.refreshed}，重建：${res.recreated}，失败：${res.failed}`)
+    await load()
+  } catch (e) {
+    ElMessage.error(e instanceof Error ? e.message : '刷新失败')
+  } finally {
+    refreshingPages.value = false
   }
 }
 
@@ -99,6 +140,49 @@ onUnmounted(() => {
       <div style="color: #909399">提示：补充会调用验证码引擎生成 verifyParam，并按“单条有效期”自动过期清理。</div>
     </el-card>
 
+    <el-card shadow="never" header="验证码页面池" style="margin-top: 12px">
+      <div v-loading="loading">
+        <el-space :size="10" wrap>
+          <el-tag type="info" effect="light">总页数：{{ pages?.total ?? 0 }}</el-tag>
+          <el-tag type="success" effect="light">待机：{{ pages?.idle ?? 0 }}</el-tag>
+          <el-tag type="warning" effect="light">获取中：{{ pages?.busy ?? 0 }}</el-tag>
+          <el-tag type="info" effect="light">刷新中：{{ pages?.refreshing ?? 0 }}</el-tag>
+          <el-tag type="info" effect="light">Pool：{{ pages?.pagePool ?? 0 }}</el-tag>
+          <el-button size="small" :loading="refreshingPages" @click="refreshPagePool">刷新全部页面</el-button>
+        </el-space>
+
+        <el-table :data="pageList" height="320" style="width: 100%; margin-top: 10px">
+          <el-table-column label="#" type="index" width="60" />
+          <el-table-column label="PageID" prop="id" min-width="140" />
+          <el-table-column label="状态" width="110">
+            <template #default="{ row }">
+              <el-tag :type="pageStateTagType(row.state)" effect="light">{{ pageStateText(row.state) }}</el-tag>
+            </template>
+          </el-table-column>
+          <el-table-column label="创建时间" width="190">
+            <template #default="{ row }">
+              {{ formatMs(row.createdAtMs) }}
+            </template>
+          </el-table-column>
+          <el-table-column label="上次打开" width="190">
+            <template #default="{ row }">
+              {{ formatMs(row.lastOpenedAtMs) }}
+            </template>
+          </el-table-column>
+          <el-table-column label="上次使用" width="190">
+            <template #default="{ row }">
+              {{ formatMs(row.lastUsedAtMs) }}
+            </template>
+          </el-table-column>
+          <el-table-column label="错误" min-width="240">
+            <template #default="{ row }">
+              <span style="color: #909399">{{ row.lastError || '-' }}</span>
+            </template>
+          </el-table-column>
+        </el-table>
+      </div>
+    </el-card>
+
     <el-card shadow="never" header="池内明细" style="margin-top: 12px">
       <el-table :data="items" height="520" style="width: 100%">
         <el-table-column label="#" type="index" width="60" />
@@ -133,4 +217,3 @@ onUnmounted(() => {
   align-items: center;
 }
 </style>
-
