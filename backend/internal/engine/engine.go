@@ -263,16 +263,12 @@ func (e *Engine) runTarget(ctx context.Context, target model.Target) {
 	}()
 
 	if target.Mode == model.TargetModeRush && target.RushAtMs > 0 {
-		leadMs := target.RushLeadMs
-		if leadMs <= 0 {
-			leadMs = 500
-		}
-		startAt := time.UnixMilli(target.RushAtMs - leadMs)
+		startAt := time.UnixMilli(target.RushAtMs)
 		if e.bus != nil {
 			e.bus.Log("info", "等待开抢时间", map[string]any{
 				"targetId": target.ID,
 				"startAt":  startAt.Format(time.RFC3339Nano),
-				"leadMs":   leadMs,
+				"rushAtMs": target.RushAtMs,
 			})
 		}
 		if !sleepUntil(ctx, startAt) {
@@ -300,6 +296,11 @@ func (e *Engine) runTarget(ctx context.Context, target model.Target) {
 }
 
 func (e *Engine) attemptOnce(ctx context.Context, target model.Target) {
+	if target.Mode == model.TargetModeRush && target.RushAtMs > 0 {
+		if time.Now().UnixMilli() < target.RushAtMs {
+			return
+		}
+	}
 	var acc model.Account
 	e.mu.Lock()
 	nAccounts := len(e.accounts)
