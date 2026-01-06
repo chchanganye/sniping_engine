@@ -38,6 +38,8 @@ type Engine struct {
 
 	captchaPool *CaptchaPool
 
+	notifySettings atomic.Value // model.NotifySettings
+
 	captchaPoolActivateAtMs atomic.Int64
 	captchaPoolActivated    atomic.Bool
 	captchaPoolMaintainerRunning atomic.Bool
@@ -137,6 +139,7 @@ func New(opts Options) *Engine {
 		preflightBackoff: make(map[string]preflightBackoffState),
 	}
 	e.maxPerTargetInFlight.Store(int64(maxPerTarget))
+	e.notifySettings.Store(DefaultNotifySettings())
 	return e
 
 }
@@ -295,6 +298,15 @@ func (e *Engine) runTarget(ctx context.Context, target model.Target) {
 		}
 	}
 
+	if expired, expireAtMs, expireMinutes := e.shouldDisableRushTargetNow(target, time.Now().UnixMilli()); expired {
+		e.disableTargetAsync(target.ID, "抢购过时自动关闭", map[string]any{
+			"rushAtMs":     target.RushAtMs,
+			"expireAtMs":   expireAtMs,
+			"expireMinute": expireMinutes,
+		})
+		return
+	}
+
 	interval := e.task.ScanInterval()
 	if target.Mode == model.TargetModeRush {
 		interval = e.task.RushInterval()
@@ -309,6 +321,14 @@ func (e *Engine) runTarget(ctx context.Context, target model.Target) {
 		case <-ctx.Done():
 			return
 		case <-ticker.C:
+			if expired, expireAtMs, expireMinutes := e.shouldDisableRushTargetNow(target, time.Now().UnixMilli()); expired {
+				e.disableTargetAsync(target.ID, "抢购过时自动关闭", map[string]any{
+					"rushAtMs":     target.RushAtMs,
+					"expireAtMs":   expireAtMs,
+					"expireMinute": expireMinutes,
+				})
+				return
+			}
 			e.launchAttempts(ctx, target)
 		}
 	}
@@ -592,8 +612,9 @@ func (e *Engine) finishReservedTarget(target model.Target, qty int, success bool
 	qty = e.normalizePerOrderQty(qty)
 	nowMs := time.Now().UnixMilli()
 
+	autoDisable := false
+
 	e.mu.Lock()
-	defer e.mu.Unlock()
 
 	if qty > 0 {
 		e.reserved[target.ID] -= qty
@@ -603,11 +624,13 @@ func (e *Engine) finishReservedTarget(target model.Target, qty int, success bool
 	}
 
 	if !success {
+		e.mu.Unlock()
 		return
 	}
 
 	st := e.states[target.ID]
 	if st == nil {
+		e.mu.Unlock()
 		return
 	}
 	st.PurchasedQty += qty
@@ -615,8 +638,14 @@ func (e *Engine) finishReservedTarget(target model.Target, qty int, success bool
 	st.LastError = ""
 	if st.TargetQty > 0 && st.PurchasedQty >= st.TargetQty {
 		st.Running = false
+		autoDisable = true
 	}
 	e.publishStateLocked(*st)
+	e.mu.Unlock()
+
+	if autoDisable {
+		e.disableTargetAsync(target.ID, "抢购完成自动关闭", nil)
+	}
 }
 
 func (e *Engine) attemptWithAccount(ctx context.Context, target model.Target, acc model.Account) bool {

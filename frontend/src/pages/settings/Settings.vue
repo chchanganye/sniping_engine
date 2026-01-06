@@ -6,13 +6,16 @@ import {
   beGetEmailSettings,
   beGetLimitsSettings,
   beGetCaptchaPoolSettings,
+  beGetNotifySettings,
   beSaveEmailSettings,
   beSaveLimitsSettings,
   beSaveCaptchaPoolSettings,
+  beSaveNotifySettings,
   beTestEmail,
   type EmailSettings,
   type LimitsSettings,
   type CaptchaPoolSettings,
+  type NotifySettings,
 } from '@/services/backend'
 
 const loading = ref(false)
@@ -25,6 +28,9 @@ const limitsSaving = ref(false)
 
 const captchaPoolLoading = ref(false)
 const captchaPoolSaving = ref(false)
+
+const notifyLoading = ref(false)
+const notifySaving = ref(false)
 
 const form = reactive<EmailSettings>({
   enabled: false,
@@ -41,6 +47,10 @@ const captchaPool = reactive<CaptchaPoolSettings>({
   warmupSeconds: 30,
   poolSize: 2,
   itemTtlSeconds: 120,
+})
+
+const notify = reactive<NotifySettings>({
+  rushExpireDisableMinutes: 10,
 })
 
 function isValidEmailLike(value: string): boolean {
@@ -199,10 +209,39 @@ async function saveCaptchaPool() {
   }
 }
 
+async function loadNotify() {
+  notifyLoading.value = true
+  try {
+    const data = await beGetNotifySettings()
+    notify.rushExpireDisableMinutes = Number(data.rushExpireDisableMinutes || 10)
+  } catch (e) {
+    ElMessage.error(e instanceof Error ? e.message : '加载失败')
+  } finally {
+    notifyLoading.value = false
+  }
+}
+
+async function saveNotify() {
+  notifySaving.value = true
+  try {
+    const payload: Partial<NotifySettings> = {
+      rushExpireDisableMinutes: Math.max(1, Math.floor(Number(notify.rushExpireDisableMinutes || 10))),
+    }
+    const saved = await beSaveNotifySettings(payload)
+    notify.rushExpireDisableMinutes = Number(saved.rushExpireDisableMinutes || 10)
+    ElMessage.success('已保存')
+  } catch (e) {
+    ElMessage.error(e instanceof Error ? e.message : '保存失败')
+  } finally {
+    notifySaving.value = false
+  }
+}
+
 onMounted(() => {
   void load()
   void loadLimits()
   void loadCaptchaPool()
+  void loadNotify()
 })
 </script>
 
@@ -282,6 +321,19 @@ onMounted(() => {
 
         <el-form-item>
           <el-button type="primary" :loading="captchaPoolSaving" @click="saveCaptchaPool">保存</el-button>
+        </el-form-item>
+      </el-form>
+    </el-card>
+
+    <el-card shadow="never" header="过时自动关闭" style="margin-top: 12px">
+      <el-form v-loading="notifyLoading" :model="notify" label-width="160px" style="max-width: 720px">
+        <el-form-item label="抢购过时关闭（分钟）">
+          <el-input-number v-model="notify.rushExpireDisableMinutes" :min="1" :max="1440" :step="1" />
+          <div style="margin-left: 10px; color: #909399">默认 10：超过抢购时间 N 分钟自动关闭该任务监控</div>
+        </el-form-item>
+
+        <el-form-item>
+          <el-button type="primary" :loading="notifySaving" @click="saveNotify">保存</el-button>
         </el-form-item>
       </el-form>
     </el-card>

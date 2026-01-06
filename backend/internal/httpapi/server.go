@@ -78,6 +78,7 @@ func (s *Server) Handler() http.Handler {
 	api.HandleFunc("/api/v1/captcha/pages/refresh", s.handleCaptchaPagesRefresh)
 	api.HandleFunc("/api/v1/settings/email", s.handleEmailSettings)
 	api.HandleFunc("/api/v1/settings/email/test", s.handleEmailTest)
+	api.HandleFunc("/api/v1/settings/notify", s.handleNotifySettings)
 	api.HandleFunc("/api/v1/settings/limits", s.handleLimitsSettings)
 	api.HandleFunc("/api/v1/settings/captcha-pool", s.handleCaptchaPoolSettings)
 	api.HandleFunc("/api/", s.handleUpstreamProxy)
@@ -561,6 +562,66 @@ func (s *Server) handleEmailSettings(w http.ResponseWriter, r *http.Request) {
 type emailTestPayload struct {
 	Email    string `json:"email,omitempty"`
 	AuthCode string `json:"authCode,omitempty"`
+}
+
+type notifySettingsPayload struct {
+	RushExpireDisableMinutes *int `json:"rushExpireDisableMinutes,omitempty"`
+}
+
+func (s *Server) handleNotifySettings(w http.ResponseWriter, r *http.Request) {
+	switch r.Method {
+	case http.MethodGet:
+		val, ok, err := s.store.GetNotifySettings(r.Context())
+		if err != nil {
+			writeJSON(w, http.StatusInternalServerError, map[string]any{"error": err.Error()})
+			return
+		}
+		if !ok {
+			writeJSON(w, http.StatusOK, map[string]any{"data": engine.DefaultNotifySettings()})
+			return
+		}
+		writeJSON(w, http.StatusOK, map[string]any{"data": val})
+	case http.MethodPost:
+		var body notifySettingsPayload
+		if err := readJSON(r, &body); err != nil {
+			writeJSON(w, http.StatusBadRequest, map[string]any{"error": err.Error()})
+			return
+		}
+
+		current, ok, err := s.store.GetNotifySettings(r.Context())
+		if err != nil {
+			writeJSON(w, http.StatusInternalServerError, map[string]any{"error": err.Error()})
+			return
+		}
+		if !ok {
+			current = engine.DefaultNotifySettings()
+		}
+
+		next := current
+		if body.RushExpireDisableMinutes != nil {
+			next.RushExpireDisableMinutes = *body.RushExpireDisableMinutes
+		}
+
+		if next.RushExpireDisableMinutes <= 0 {
+			next.RushExpireDisableMinutes = 10
+		}
+		if next.RushExpireDisableMinutes > 1440 {
+			writeJSON(w, http.StatusBadRequest, map[string]any{"error": "rushExpireDisableMinutes is too large"})
+			return
+		}
+
+		saved, err := s.store.UpsertNotifySettings(r.Context(), next)
+		if err != nil {
+			writeJSON(w, http.StatusInternalServerError, map[string]any{"error": err.Error()})
+			return
+		}
+		if s.engine != nil {
+			_ = s.engine.SetNotifySettings(saved)
+		}
+		writeJSON(w, http.StatusOK, map[string]any{"data": saved})
+	default:
+		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+	}
 }
 
 type limitsSettingsPayload struct {

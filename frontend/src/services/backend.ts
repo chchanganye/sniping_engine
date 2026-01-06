@@ -121,6 +121,10 @@ export interface CaptchaPoolSettings {
   itemTtlSeconds: number
 }
 
+export interface NotifySettings {
+  rushExpireDisableMinutes: number
+}
+
 export interface CaptchaPoolItemView {
   id: string
   createdAtMs: number
@@ -238,6 +242,16 @@ export async function beGetCaptchaPoolSettings(): Promise<CaptchaPoolSettings> {
 
 export async function beSaveCaptchaPoolSettings(payload: Partial<CaptchaPoolSettings>): Promise<CaptchaPoolSettings> {
   const resp = await http.post<DataEnvelope<CaptchaPoolSettings>>('/api/v1/settings/captcha-pool', payload)
+  return resp.data.data
+}
+
+export async function beGetNotifySettings(): Promise<NotifySettings> {
+  const resp = await http.get<DataEnvelope<NotifySettings>>('/api/v1/settings/notify')
+  return resp.data.data
+}
+
+export async function beSaveNotifySettings(payload: Partial<NotifySettings>): Promise<NotifySettings> {
+  const resp = await http.post<DataEnvelope<NotifySettings>>('/api/v1/settings/notify', payload)
   return resp.data.data
 }
 

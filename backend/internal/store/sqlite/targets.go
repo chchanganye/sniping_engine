@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"strings"
 	"time"
 
 	"github.com/google/uuid"
@@ -223,5 +224,20 @@ func (s *Store) ListEnabledTargets(ctx context.Context) ([]model.Target, error) 
 
 func (s *Store) DeleteTarget(ctx context.Context, id string) error {
 	_, err := s.db.ExecContext(ctx, `DELETE FROM targets WHERE id = ?`, id)
+	return err
+}
+
+func (s *Store) SetTargetEnabled(ctx context.Context, id string, enabled bool) error {
+	if strings.TrimSpace(id) == "" {
+		return errors.New("id is required")
+	}
+	v := 0
+	if enabled {
+		v = 1
+	}
+	now := time.Now().UnixMilli()
+	_, err := s.db.ExecContext(ctx, `
+		UPDATE targets SET enabled = ?, updated_at = ? WHERE id = ?
+	`, v, now, strings.TrimSpace(id))
 	return err
 }

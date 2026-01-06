@@ -69,6 +69,13 @@ func main() {
 		bus.Log("warn", "读取验证码池设置失败", map[string]any{"error": err.Error()})
 	}
 
+	notifySettings := engine.DefaultNotifySettings()
+	if v, ok, err := store.GetNotifySettings(ctx); err == nil && ok {
+		notifySettings = v
+	} else if err != nil {
+		bus.Log("warn", "读取通知设置失败", map[string]any{"error": err.Error()})
+	}
+
 	utils.SetCaptchaMaxConcurrent(cfg.Limits.CaptchaMaxInFlight)
 	utils.SetCaptchaEngineState(utils.CaptchaEngineStateStarting, "", 0)
 	go func() {
@@ -95,6 +102,7 @@ func main() {
 		Notifier: emailNotifier,
 	})
 	_ = eng.SetCaptchaPoolSettings(captchaPoolSettings)
+	_ = eng.SetNotifySettings(notifySettings)
 
 	api := httpapi.New(httpapi.Options{
 		Cfg:      cfg,

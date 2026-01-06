@@ -19,3 +19,8 @@ type CaptchaPoolSettings struct {
 	// ItemTTLSeconds 每条验证码（verifyParam）从获取时刻开始的有效期（倒计时）。
 	ItemTTLSeconds int `json:"itemTtlSeconds"`
 }
+
+type NotifySettings struct {
+	// RushExpireDisableMinutes 抢购时间(rushAtMs)过去多少分钟后自动关闭监控（enabled=false）。
+	RushExpireDisableMinutes int `json:"rushExpireDisableMinutes"`
+}
