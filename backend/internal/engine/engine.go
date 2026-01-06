@@ -62,7 +62,22 @@ type Engine struct {
 
 	maxPerTargetInFlight atomic.Int64
 
+	preflightCache   map[string]preflightCacheEntry
+	preflightBackoff map[string]preflightBackoffState
+
 	rr atomic.Uint64
+}
+
+const preflightCacheTTL = 3 * time.Second
+
+type preflightCacheEntry struct {
+	AtMs  int64
+	Value provider.PreflightResult
+}
+
+type preflightBackoffState struct {
+	Failures int
+	UntilMs  int64
 }
 
 type TestBuyResult struct {
@@ -118,6 +133,8 @@ func New(opts Options) *Engine {
 		accountLocks:  make(map[string]chan struct{}),
 		reserved:      make(map[string]int),
 		globalLimiter: rate.NewLimiter(rate.Limit(globalQPS), globalBurst),
+		preflightCache:   make(map[string]preflightCacheEntry),
+		preflightBackoff: make(map[string]preflightBackoffState),
 	}
 	e.maxPerTargetInFlight.Store(int64(maxPerTarget))
 	return e
@@ -174,6 +191,8 @@ func (e *Engine) StartAll(ctx context.Context) error {
 	e.targets = targets
 	e.targetCancels = make(map[string]context.CancelFunc)
 	e.targetSnapshots = make(map[string]model.Target)
+	e.preflightCache = make(map[string]preflightCacheEntry)
+	e.preflightBackoff = make(map[string]preflightBackoffState)
 	e.perLimiter = make(map[string]*rate.Limiter)
 	e.accountLocks = make(map[string]chan struct{})
 	for _, acc := range accounts {
@@ -628,24 +647,42 @@ func (e *Engine) attemptWithAccount(ctx context.Context, target model.Target, ac
 		return false
 	}
 
-	if !e.waitLimits(ctx, acc.ID) {
-		return false
-	}
-
-	pre, updatedAcc, err := e.provider.Preflight(ctx, acc, target)
-	if err != nil {
-		e.setError(target.ID, err)
-		if e.bus != nil {
-			e.bus.Log("warn", "预下单失败", map[string]any{
-				"targetId":  target.ID,
-				"accountId": acc.ID,
-				"error":     err.Error(),
-			})
+	nowMs := time.Now().UnixMilli()
+	pre, ok := e.getCachedPreflight(acc.ID, target.ID, nowMs)
+	if !ok {
+		if !e.canPreflightNow(target.ID, nowMs) {
+			return false
 		}
-		return false
+		if !e.waitLimits(ctx, acc.ID) {
+			return false
+		}
+		var updatedAcc model.Account
+		var err error
+		pre, updatedAcc, err = e.provider.Preflight(ctx, acc, target)
+		if err != nil {
+			failures, wait := e.bumpPreflightBackoff(target.ID, nowMs)
+			e.setError(target.ID, err)
+			if e.bus != nil {
+				e.bus.Log("warn", "预下单失败", map[string]any{
+					"targetId":   target.ID,
+					"accountId":  acc.ID,
+					"error":      err.Error(),
+					"backoffMs":  wait.Milliseconds(),
+					"failures":   failures,
+					"retryAtMs":  nowMs + wait.Milliseconds(),
+				})
+			}
+			return false
+		}
+		e.resetPreflightBackoff(target.ID)
+		_ = e.persistAccount(ctx, updatedAcc)
+		acc = updatedAcc
+		if pre.CanBuy {
+			e.setCachedPreflight(acc.ID, target.ID, pre, nowMs)
+		} else {
+			e.clearCachedPreflight(acc.ID, target.ID)
+		}
 	}
-	_ = e.persistAccount(ctx, updatedAcc)
-	acc = updatedAcc
 
 	e.mu.Lock()
 	if st := e.states[target.ID]; st != nil {
@@ -748,6 +785,123 @@ func (e *Engine) attemptWithAccount(ctx context.Context, target model.Target, ac
 		})
 	}
 	return true
+}
+
+func (e *Engine) preflightCacheKey(accountID string, targetID string) string {
+	return accountID + "|" + targetID
+}
+
+func (e *Engine) getCachedPreflight(accountID string, targetID string, nowMs int64) (provider.PreflightResult, bool) {
+	if e == nil || accountID == "" || targetID == "" {
+		return provider.PreflightResult{}, false
+	}
+	e.mu.Lock()
+	defer e.mu.Unlock()
+	if e.preflightCache == nil {
+		return provider.PreflightResult{}, false
+	}
+	key := e.preflightCacheKey(accountID, targetID)
+	entry, ok := e.preflightCache[key]
+	if !ok {
+		return provider.PreflightResult{}, false
+	}
+	if entry.AtMs <= 0 || nowMs-entry.AtMs > preflightCacheTTL.Milliseconds() || len(entry.Value.Render) == 0 {
+		delete(e.preflightCache, key)
+		return provider.PreflightResult{}, false
+	}
+	return entry.Value, true
+}
+
+func (e *Engine) setCachedPreflight(accountID string, targetID string, v provider.PreflightResult, nowMs int64) {
+	if e == nil || accountID == "" || targetID == "" {
+		return
+	}
+	if len(v.Render) == 0 {
+		return
+	}
+	if nowMs <= 0 {
+		nowMs = time.Now().UnixMilli()
+	}
+	e.mu.Lock()
+	if e.preflightCache == nil {
+		e.preflightCache = make(map[string]preflightCacheEntry)
+	}
+	e.preflightCache[e.preflightCacheKey(accountID, targetID)] = preflightCacheEntry{AtMs: nowMs, Value: v}
+	e.mu.Unlock()
+}
+
+func (e *Engine) clearCachedPreflight(accountID string, targetID string) {
+	if e == nil || accountID == "" || targetID == "" {
+		return
+	}
+	e.mu.Lock()
+	if e.preflightCache != nil {
+		delete(e.preflightCache, e.preflightCacheKey(accountID, targetID))
+	}
+	e.mu.Unlock()
+}
+
+func (e *Engine) canPreflightNow(targetID string, nowMs int64) bool {
+	if e == nil || targetID == "" {
+		return true
+	}
+	e.mu.Lock()
+	defer e.mu.Unlock()
+	if e.preflightBackoff == nil {
+		return true
+	}
+	st, ok := e.preflightBackoff[targetID]
+	if !ok || st.UntilMs <= 0 {
+		return true
+	}
+	return nowMs >= st.UntilMs
+}
+
+func (e *Engine) resetPreflightBackoff(targetID string) {
+	if e == nil || targetID == "" {
+		return
+	}
+	e.mu.Lock()
+	if e.preflightBackoff != nil {
+		delete(e.preflightBackoff, targetID)
+	}
+	e.mu.Unlock()
+}
+
+func (e *Engine) bumpPreflightBackoff(targetID string, nowMs int64) (failures int, wait time.Duration) {
+	if e == nil || targetID == "" {
+		return 0, 0
+	}
+	if nowMs <= 0 {
+		nowMs = time.Now().UnixMilli()
+	}
+
+	const base = 1500 * time.Millisecond
+	const max = 12 * time.Second
+
+	e.mu.Lock()
+	if e.preflightBackoff == nil {
+		e.preflightBackoff = make(map[string]preflightBackoffState)
+	}
+	st := e.preflightBackoff[targetID]
+	st.Failures++
+	n := st.Failures - 1
+	if n < 0 {
+		n = 0
+	}
+	if n > 4 {
+		n = 4
+	}
+	wait = base * time.Duration(1<<n)
+	if wait > max {
+		wait = max
+	}
+	st.UntilMs = nowMs + wait.Milliseconds()
+	e.preflightBackoff[targetID] = st
+	failures = st.Failures
+	e.mu.Unlock()
+
+	return failures, wait
 }
 
 func (e *Engine) TestBuyOnce(ctx context.Context, targetID string, captchaVerifyParam string, opID string) (TestBuyResult, error) {
