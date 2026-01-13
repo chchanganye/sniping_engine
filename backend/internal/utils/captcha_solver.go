@@ -12,6 +12,7 @@ import (
 	"math/rand"
 	"net"
 	"net/http"
+	"net/url"
 	"os"
 	"os/exec"
 	"runtime"
@@ -159,7 +160,7 @@ type solveRequest struct {
 }
 
 type solveResponse struct {
-	Code int             `json:"code"`
+	Code json.RawMessage `json:"code"`
 	Msg  string          `json:"msg"`
 	Data json.RawMessage `json:"data"`
 }
@@ -1186,8 +1187,34 @@ func solveAliyunCaptchaWithMetrics(parent context.Context, timestamp int64, drac
 		lastErr       error
 	)
 
-	apiXCh := make(chan float64, 10)
+	type apiSolveResult struct {
+		X   float64
+		Err error
+	}
+
+	apiSolveCh := make(chan apiSolveResult, 10)
 	verifyResultCh := make(chan string, 10)
+
+	debugEnabled := func() bool {
+		v := strings.TrimSpace(os.Getenv("SNIPING_ENGINE_CAPTCHA_DEBUG"))
+		return strings.EqualFold(v, "1") || strings.EqualFold(v, "true")
+	}
+	debugf := func(format string, args ...any) {
+		if !debugEnabled() {
+			return
+		}
+		fmt.Printf("[验证码调试] "+format+"\n", args...)
+	}
+
+	drainApiSolveChan := func(ch chan apiSolveResult) {
+		for {
+			select {
+			case <-ch:
+			default:
+				return
+			}
+		}
+	}
 
 	resetState := func() {
 		mu.Lock()
@@ -1196,8 +1223,35 @@ func solveAliyunCaptchaWithMetrics(parent context.Context, timestamp int64, drac
 		hasTriggered = false
 		mu.Unlock()
 
-		drainFloat64Chan(apiXCh)
+		drainApiSolveChan(apiSolveCh)
 		drainStringChan(verifyResultCh)
+	}
+
+	parseSolveResponseCode := func(raw json.RawMessage) (int, error) {
+		raw = bytes.TrimSpace(raw)
+		if len(raw) == 0 {
+			return 0, errors.New("missing code")
+		}
+		if len(raw) > 0 && raw[0] == '"' {
+			var s string
+			if err := json.Unmarshal(raw, &s); err != nil {
+				return 0, err
+			}
+			s = strings.TrimSpace(s)
+			if s == "" {
+				return 0, errors.New("empty code")
+			}
+			n, err := strconv.Atoi(s)
+			if err != nil {
+				return 0, err
+			}
+			return n, nil
+		}
+		var n int
+		if err := json.Unmarshal(raw, &n); err != nil {
+			return 0, err
+		}
+		return n, nil
 	}
 
 	checkAndSolve := func() {
@@ -1215,13 +1269,39 @@ func solveAliyunCaptchaWithMetrics(parent context.Context, timestamp int64, drac
 			reqBody := solveRequest{
 				SlideImage:      slide,
 				BackgroundImage: bg,
-				Token:           JfbymToken,
-				Type:            JfbymType,
+				Token:           strings.TrimSpace(JfbymToken),
+				Type:            strings.TrimSpace(JfbymType),
 			}
-			bs, _ := json.Marshal(reqBody)
+			if reqBody.Token == "" {
+				select {
+				case apiSolveCh <- apiSolveResult{Err: errors.New("打码服务 token 为空")}:
+				default:
+				}
+				return
+			}
 
-			resp, err := captchaHTTPClient.Post(JfbymApiUrl, "application/json", bytes.NewReader(bs))
+			form := url.Values{}
+			form.Set("slide_image", reqBody.SlideImage)
+			form.Set("background_image", reqBody.BackgroundImage)
+			form.Set("token", reqBody.Token)
+			form.Set("type", reqBody.Type)
+
+			req, err := http.NewRequestWithContext(ctx, http.MethodPost, JfbymApiUrl, strings.NewReader(form.Encode()))
 			if err != nil {
+				select {
+				case apiSolveCh <- apiSolveResult{Err: err}:
+				default:
+				}
+				return
+			}
+			req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+
+			resp, err := captchaHTTPClient.Do(req)
+			if err != nil {
+				select {
+				case apiSolveCh <- apiSolveResult{Err: err}:
+				default:
+				}
 				return
 			}
 			defer resp.Body.Close()
@@ -1229,8 +1309,36 @@ func solveAliyunCaptchaWithMetrics(parent context.Context, timestamp int64, drac
 			respBody, _ := io.ReadAll(resp.Body)
 			var sr solveResponse
 			if err := json.Unmarshal(respBody, &sr); err != nil {
+				debugf("打码接口返回非 JSON（len=%d）", len(respBody))
+				select {
+				case apiSolveCh <- apiSolveResult{Err: fmt.Errorf("打码接口返回非 JSON: %w", err)}:
+				default:
+				}
 				return
 			}
+
+			code, err := parseSolveResponseCode(sr.Code)
+			if err != nil {
+				select {
+				case apiSolveCh <- apiSolveResult{Err: fmt.Errorf("解析打码接口 code 失败: %w", err)}:
+				default:
+				}
+				return
+			}
+			// JFBYM 的成功 code 常见为 10000（也可能是 0），这里兼容两种。
+			if code != 0 && code != 10000 {
+				msg := strings.TrimSpace(sr.Msg)
+				if msg == "" {
+					msg = "打码接口返回失败"
+				}
+				debugf("打码失败 code=%d msg=%s", code, msg)
+				select {
+				case apiSolveCh <- apiSolveResult{Err: fmt.Errorf("%s (code=%d)", msg, code)}:
+				default:
+				}
+				return
+			}
+			debugf("打码返回 success code=%d msg=%s", code, strings.TrimSpace(sr.Msg))
 
 			var items []solveItem
 			_ = json.Unmarshal(sr.Data, &items)
@@ -1242,18 +1350,44 @@ func solveAliyunCaptchaWithMetrics(parent context.Context, timestamp int64, drac
 			}
 
 			for _, d := range items {
-				if d.Code != 0 {
-					continue
-				}
 				val, err := strconv.ParseFloat(d.Data, 64)
 				if err != nil {
 					continue
 				}
+				if val <= 0 {
+					continue
+				}
 				select {
-				case apiXCh <- val:
+				case apiSolveCh <- apiSolveResult{X: val}:
 				default:
 				}
 				return
+			}
+
+			// 有些返回 data 可能就是纯数字/字符串
+			var rawStr string
+			if json.Unmarshal(sr.Data, &rawStr) == nil {
+				if v, err := strconv.ParseFloat(strings.TrimSpace(rawStr), 64); err == nil {
+					select {
+					case apiSolveCh <- apiSolveResult{X: v}:
+					default:
+					}
+					return
+				}
+			}
+			var rawNum float64
+			if json.Unmarshal(sr.Data, &rawNum) == nil && rawNum > 0 {
+				select {
+				case apiSolveCh <- apiSolveResult{X: rawNum}:
+				default:
+				}
+				return
+			}
+
+			debugf("打码接口返回无可用结果 code=%d dataLen=%d", code, len(sr.Data))
+			select {
+			case apiSolveCh <- apiSolveResult{Err: errors.New("打码接口返回无可用结果")}:
+			default:
 			}
 		}()
 	}
@@ -1297,6 +1431,7 @@ func solveAliyunCaptchaWithMetrics(parent context.Context, timestamp int64, drac
 		if len(body) == 0 {
 			return
 		}
+		debugf("捕获 back.png bytes=%d", len(body))
 		b64 := base64.StdEncoding.EncodeToString(body)
 		mu.Lock()
 		backB64 = b64
@@ -1310,6 +1445,7 @@ func solveAliyunCaptchaWithMetrics(parent context.Context, timestamp int64, drac
 		if len(body) == 0 {
 			return
 		}
+		debugf("捕获 shadow.png bytes=%d", len(body))
 		b64 := base64.StdEncoding.EncodeToString(body)
 		mu.Lock()
 		shadowB64 = b64
@@ -1331,6 +1467,7 @@ func solveAliyunCaptchaWithMetrics(parent context.Context, timestamp int64, drac
 		}
 
 		if *res.Result.VerifyResult && res.Result.SecurityToken != "" {
+			debugf("捕获 verifyResult success securityTokenLen=%d", len(res.Result.SecurityToken))
 			sceneID := pageSceneID
 			if sceneID == "" {
 				sceneID = res.Result.SceneId
@@ -1351,6 +1488,7 @@ func solveAliyunCaptchaWithMetrics(parent context.Context, timestamp int64, drac
 		}
 
 		if !*res.Result.VerifyResult {
+			debugf("捕获 verifyResult failed")
 			select {
 			case verifyResultCh <- "":
 			default:
@@ -1436,7 +1574,12 @@ func solveAliyunCaptchaWithMetrics(parent context.Context, timestamp int64, drac
 		// 3) 等待打码结果。
 		var apiX float64
 		select {
-		case apiX = <-apiXCh:
+		case sr := <-apiSolveCh:
+			if sr.Err != nil {
+				lastErr = sr.Err
+				continue
+			}
+			apiX = sr.X
 		case <-time.After(25 * time.Second):
 			lastErr = errors.New("等待打码结果超时")
 			continue
