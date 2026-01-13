@@ -5,6 +5,7 @@ import dayjs from 'dayjs'
 import {
   beCaptchaPagesRefresh,
   beCaptchaPagesStatus,
+  beCaptchaPagesStop,
   beCaptchaPoolFill,
   beCaptchaPoolStatus,
   type CaptchaPageInfo,
@@ -16,6 +17,7 @@ import {
 const loading = ref(false)
 const filling = ref(false)
 const refreshingPages = ref(false)
+const stoppingPages = ref(false)
 const status = ref<CaptchaPoolStatus | null>(null)
 const pages = ref<CaptchaPagesStatus | null>(null)
 const nowMs = ref(Date.now())
@@ -75,6 +77,19 @@ async function refreshPagePool() {
     ElMessage.error(e instanceof Error ? e.message : '刷新失败')
   } finally {
     refreshingPages.value = false
+  }
+}
+
+async function stopAllFetching() {
+  stoppingPages.value = true
+  try {
+    const res = await beCaptchaPagesStop()
+    ElMessage.success(`已发送停止指令（当前获取中：${res.busy}）`)
+    await load()
+  } catch (e) {
+    ElMessage.error(e instanceof Error ? e.message : '停止失败')
+  } finally {
+    stoppingPages.value = false
   }
 }
 
@@ -149,6 +164,7 @@ onUnmounted(() => {
           <el-tag type="info" effect="light">刷新中：{{ pages?.refreshing ?? 0 }}</el-tag>
           <el-tag type="info" effect="light">Pool：{{ pages?.pagePool ?? 0 }}</el-tag>
           <el-button size="small" :loading="refreshingPages" @click="refreshPagePool">刷新全部页面</el-button>
+          <el-button size="small" type="danger" plain :loading="stoppingPages" @click="stopAllFetching">停止全部获取</el-button>
         </el-space>
 
         <el-table :data="pageList" height="320" style="width: 100%; margin-top: 10px">

@@ -76,6 +76,7 @@ func (s *Server) Handler() http.Handler {
 	api.HandleFunc("/api/v1/captcha/pool/fill", s.handleCaptchaPoolFill)
 	api.HandleFunc("/api/v1/captcha/pages", s.handleCaptchaPages)
 	api.HandleFunc("/api/v1/captcha/pages/refresh", s.handleCaptchaPagesRefresh)
+	api.HandleFunc("/api/v1/captcha/pages/stop", s.handleCaptchaPagesStop)
 	api.HandleFunc("/api/v1/settings/email", s.handleEmailSettings)
 	api.HandleFunc("/api/v1/settings/email/test", s.handleEmailTest)
 	api.HandleFunc("/api/v1/settings/notify", s.handleNotifySettings)
@@ -180,6 +181,15 @@ func (s *Server) handleCaptchaPagesRefresh(w http.ResponseWriter, r *http.Reques
 		writeJSON(w, http.StatusInternalServerError, map[string]any{"error": err.Error()})
 		return
 	}
+	writeJSON(w, http.StatusOK, map[string]any{"data": res})
+}
+
+func (s *Server) handleCaptchaPagesStop(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		writeJSON(w, http.StatusMethodNotAllowed, map[string]any{"error": "method not allowed"})
+		return
+	}
+	res := utils.StopAllCaptchaFetching()
 	writeJSON(w, http.StatusOK, map[string]any{"data": res})
 }
 

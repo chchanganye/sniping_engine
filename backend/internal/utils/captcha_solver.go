@@ -95,6 +95,11 @@ type CaptchaPagesRefreshResult struct {
 	Failed    int `json:"failed"`
 }
 
+type CaptchaStopAllResult struct {
+	AtMs int64 `json:"atMs"`
+	Busy int   `json:"busy"`
+}
+
 type CaptchaSolveMetrics struct {
 	Attempts int           `json:"attempts"`
 	Duration time.Duration `json:"duration"`
@@ -219,6 +224,11 @@ var (
 
 	captchaWarmupMu      sync.Mutex
 	captchaWarmupRunning bool
+
+	captchaStopMu     sync.Mutex
+	captchaStopOnce   sync.Once
+	captchaStopCtx    context.Context
+	captchaStopCancel context.CancelFunc
 
 	captchaSolveCount    atomic.Int64
 	captchaSolveTotalMs  atomic.Int64
@@ -660,6 +670,24 @@ func captchaSleepScale() float64 {
 	return captchaSleepScaleVal
 }
 
+func captchaMaxSolveAttempts() int {
+	v := strings.TrimSpace(os.Getenv("SNIPING_ENGINE_CAPTCHA_MAX_TRIES"))
+	if v == "" {
+		return 3
+	}
+	n, err := strconv.Atoi(v)
+	if err != nil {
+		return 3
+	}
+	if n <= 0 {
+		return 3
+	}
+	if n > 10 {
+		return 10
+	}
+	return n
+}
+
 func captchaSleep(base time.Duration, jitter time.Duration) {
 	d := base
 	if jitter > 0 {
@@ -696,6 +724,34 @@ func drainStringChan(ch chan string) {
 
 func GetCaptchaMaxConcurrent() int {
 	return getCaptchaMaxConcurrent()
+}
+
+func getCaptchaStopContext() context.Context {
+	captchaStopOnce.Do(func() {
+		captchaStopMu.Lock()
+		captchaStopCtx, captchaStopCancel = context.WithCancel(context.Background())
+		captchaStopMu.Unlock()
+	})
+
+	captchaStopMu.Lock()
+	ctx := captchaStopCtx
+	captchaStopMu.Unlock()
+	return ctx
+}
+
+func StopAllCaptchaFetching() CaptchaStopAllResult {
+	nowMs := time.Now().UnixMilli()
+	st := GetCaptchaPagesStatus()
+
+	_ = getCaptchaStopContext()
+	captchaStopMu.Lock()
+	if captchaStopCancel != nil {
+		captchaStopCancel()
+	}
+	captchaStopCtx, captchaStopCancel = context.WithCancel(context.Background())
+	captchaStopMu.Unlock()
+
+	return CaptchaStopAllResult{AtMs: nowMs, Busy: st.Busy}
 }
 
 func GetCaptchaPagesStatus() CaptchaPagesStatus {
@@ -1132,6 +1188,18 @@ func solveAliyunCaptchaWithMetrics(parent context.Context, timestamp int64, drac
 	ctx, cancel := context.WithTimeout(parent, 360*time.Second)
 	defer cancel()
 
+	stopCtx := getCaptchaStopContext()
+	if stopCtx != nil {
+		go func() {
+			select {
+			case <-stopCtx.Done():
+				cancel()
+			case <-ctx.Done():
+				return
+			}
+		}()
+	}
+
 	// 如果验证码引擎还没就绪（首次启动可能在下载浏览器），这里先等待，避免抢购阶段因为超时而直接失败。
 	if _, err := EnsureCaptchaEngineReady(ctx, 0); err != nil {
 		metrics.Duration = time.Since(started)
@@ -1156,9 +1224,31 @@ func solveAliyunCaptchaWithMetrics(parent context.Context, timestamp int64, drac
 	var (
 		verifySuccess bool
 		lastErr       error
+		discardAfter  bool
 	)
 	defer func() {
 		if cp == nil || cp.page == nil {
+			return
+		}
+		if discardAfter {
+			discardCaptchaPage(cp)
+			go func() {
+				ctx, cancel := context.WithTimeout(context.Background(), 25*time.Second)
+				defer cancel()
+				ncp, p, err := newCaptchaPage(ctx)
+				if err != nil {
+					return
+				}
+				if err := navigateCaptchaPage(p, aliyunCaptchaTargetURL); err != nil {
+					discardCaptchaPage(ncp)
+					return
+				}
+				nowMs := time.Now().UnixMilli()
+				ncp.lastOpenedAtMs.Store(nowMs)
+				ncp.lastUsedAtMs.Store(nowMs)
+				ncp.lastError.Store("")
+				releaseCaptchaPage(ncp)
+			}()
 			return
 		}
 		// 释放前尽量把页面“重置到可复用状态”，避免页面打开太久导致卡死/白屏。
@@ -1542,8 +1632,14 @@ func solveAliyunCaptchaWithMetrics(parent context.Context, timestamp int64, drac
 	}
 	pageSceneID = extractSceneID(page)
 
+	maxTries := captchaMaxSolveAttempts()
+
 	// --- 验证循环 ---
 	for tryCount := 1; !verifySuccess; tryCount++ {
+		if maxTries > 0 && tryCount > maxTries {
+			discardAfter = true
+			break
+		}
 		metrics.Attempts = tryCount
 		select {
 		case <-ctx.Done():
@@ -1719,6 +1815,17 @@ func solveAliyunCaptchaWithMetrics(parent context.Context, timestamp int64, drac
 		case <-ctx.Done():
 			metrics.Duration = time.Since(started)
 			return "", metrics, errors.New("等待验证结果超时")
+		}
+	}
+
+	if discardAfter && !verifySuccess {
+		if maxTries <= 0 {
+			maxTries = 3
+		}
+		if lastErr != nil {
+			lastErr = fmt.Errorf("%w（连续失败%d次，已自动重建页面）", lastErr, maxTries)
+		} else {
+			lastErr = fmt.Errorf("验证码失败（连续失败%d次，已自动重建页面）", maxTries)
 		}
 	}
 

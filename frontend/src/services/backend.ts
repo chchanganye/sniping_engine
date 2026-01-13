@@ -115,6 +115,11 @@ export interface CaptchaPagesStatus {
   pages: CaptchaPageInfo[]
 }
 
+export interface CaptchaStopAllResult {
+  atMs: number
+  busy: number
+}
+
 export interface CaptchaPoolSettings {
   warmupSeconds: number
   poolSize: number
@@ -292,6 +297,11 @@ export async function beCaptchaPagesRefresh(payload?: { forceRecreate?: boolean;
     payload ?? {},
     { timeout: 240000 },
   )
+  return resp.data.data
+}
+
+export async function beCaptchaPagesStop(): Promise<CaptchaStopAllResult> {
+  const resp = await http.post<DataEnvelope<CaptchaStopAllResult>>('/api/v1/captcha/pages/stop', {})
   return resp.data.data
 }
 
