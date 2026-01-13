@@ -104,6 +104,33 @@ function friendlyLogMessage(msg: string, fields?: Record<string, any>) {
     return `验证码失败：尝试${attempts}次，总耗时${sec}秒，原因：${reason}${formatIds(fields)}`
   }
 
+  if (m === '验证码池开始维护') {
+    const at = fields?.activateAtMs != null ? String(fields.activateAtMs) : ''
+    return at ? `验证码池开始维护（activateAtMs=${at}）` : '验证码池开始维护'
+  }
+  if (m === '验证码池：生成失败') {
+    const attempts = fields?.attempts != null ? String(fields.attempts) : '-'
+    const sec = fields?.costSec != null ? String(fields.costSec) : fields?.costMs != null ? String(Number(fields.costMs) / 1000) : '-'
+    const reason = normalizeErrorText(String(fields?.error ?? '')) || '未知错误'
+    return `验证码池生成失败：${reason}（尝试${attempts}次，耗时${sec}秒）`
+  }
+  if (m === '验证码池：手动补充开始') {
+    const count = fields?.count != null ? String(fields.count) : '-'
+    return `验证码池手动补充开始：${count}条`
+  }
+  if (m === '验证码池：手动补充完成') {
+    const added = fields?.added != null ? String(fields.added) : '-'
+    const failed = fields?.failed != null ? String(fields.failed) : '-'
+    const size = fields?.size != null ? String(fields.size) : ''
+    return size ? `验证码池手动补充完成：新增${added}，失败${failed}（当前${size}）` : `验证码池手动补充完成：新增${added}，失败${failed}`
+  }
+  if (m === '验证码池：手动补充失败') {
+    const added = fields?.added != null ? String(fields.added) : '-'
+    const failed = fields?.failed != null ? String(fields.failed) : '-'
+    const reason = normalizeErrorText(String(fields?.error ?? '')) || '未知错误'
+    return `验证码池手动补充失败：新增${added}，失败${failed}，原因：${reason}`
+  }
+
   if (m === 'http request') return `正在发送网络请求：${summarizeRequest(fields) || '请求中…'}`
   if (m === 'proxy request') return `正在代理请求：${summarizeRequest(fields) || '请求中…'}`
 

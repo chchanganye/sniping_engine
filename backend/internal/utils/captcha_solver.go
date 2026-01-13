@@ -1152,6 +1152,11 @@ func solveAliyunCaptchaWithMetrics(parent context.Context, timestamp int64, drac
 	if err != nil {
 		return "", metrics, err
 	}
+
+	var (
+		verifySuccess bool
+		lastErr       error
+	)
 	defer func() {
 		if cp == nil || cp.page == nil {
 			return
@@ -1170,7 +1175,20 @@ func solveAliyunCaptchaWithMetrics(parent context.Context, timestamp int64, drac
 		nowMs := time.Now().UnixMilli()
 		cp.lastOpenedAtMs.Store(nowMs)
 		cp.lastUsedAtMs.Store(nowMs)
-		cp.lastError.Store("")
+		if verifySuccess {
+			cp.lastError.Store("")
+		} else if lastErr != nil {
+			errText := strings.TrimSpace(lastErr.Error())
+			if errText == "" {
+				errText = "验证码失败"
+			}
+			if len(errText) > 240 {
+				errText = errText[:240]
+			}
+			cp.lastError.Store(errText)
+		} else {
+			cp.lastError.Store("验证码失败")
+		}
 		releaseCaptchaPage(cp)
 	}()
 
@@ -1182,9 +1200,7 @@ func solveAliyunCaptchaWithMetrics(parent context.Context, timestamp int64, drac
 		hasTriggered bool
 
 		pageSceneID   string
-		verifySuccess bool
 		finalResult   string
-		lastErr       error
 	)
 
 	type apiSolveResult struct {
@@ -1520,8 +1536,9 @@ func solveAliyunCaptchaWithMetrics(parent context.Context, timestamp int64, drac
 	}
 
 	if err := ensureCaptchaPageOpened(); err != nil {
+		lastErr = fmt.Errorf("打开页面失败: %v", err)
 		metrics.Duration = time.Since(started)
-		return "", metrics, fmt.Errorf("打开页面失败: %v", err)
+		return "", metrics, lastErr
 	}
 	pageSceneID = extractSceneID(page)
 
@@ -1534,8 +1551,9 @@ func solveAliyunCaptchaWithMetrics(parent context.Context, timestamp int64, drac
 				metrics.Duration = time.Since(started)
 				return "", metrics, lastErr
 			}
+			lastErr = errors.New("验证码流程超时")
 			metrics.Duration = time.Since(started)
-			return "", metrics, errors.New("验证码流程超时")
+			return "", metrics, lastErr
 		default:
 		}
 
@@ -1622,14 +1640,33 @@ func solveAliyunCaptchaWithMetrics(parent context.Context, timestamp int64, drac
 			return res.Value.Num()
 		}
 
-		// 先移动到理论位置，再做自适应微调。
-		currentMouseX := startX + finalDistance
-		page.Mouse.MustMoveTo(currentMouseX, startY)
-		captchaSleep(120*time.Millisecond, 40*time.Millisecond)
+		// 先用“人类轨迹”拖到接近目标位置（避免每次轨迹完全一致被风控），再做自适应微调。
+		targetX := startX + finalDistance
+
+		// 轻微过冲：更像人类拖动。
+		overshoot := 0.0
+		if rng.Intn(10) < 4 {
+			overshoot = 1 + rng.Float64()*3 // 1~4px
+		}
+		endX := targetX + overshoot
+		endY := startY + (rng.Float64()*6 - 3)
+
+		midRatio := 0.55 + rng.Float64()*0.25 // 0.55~0.80
+		midX := startX + (endX-startX)*midRatio
+		midY := startY + (rng.Float64()*10 - 5)
+
+		steps1 := 8 + rng.Intn(10)
+		steps2 := 12 + rng.Intn(16)
+		executeTrack(rng, page, generateBezierTrack(rng, startX, startY, midX, midY, steps1))
+		captchaSleep(20*time.Millisecond, 40*time.Millisecond)
+		executeTrack(rng, page, generateBezierTrack(rng, midX, midY, endX, endY, steps2))
+
+		currentMouseX := endX
+		captchaSleep(60*time.Millisecond, 40*time.Millisecond)
 
 		targetPuzzlePos := finalDistance
-		tolerance := 1.0
-		maxAttempts := 30
+		tolerance := 0.8 + rng.Float64()*0.6
+		maxAttempts := 24 + rng.Intn(18)
 		success := false
 
 		for attempt := 0; attempt < maxAttempts; attempt++ {
@@ -1656,7 +1693,7 @@ func solveAliyunCaptchaWithMetrics(parent context.Context, timestamp int64, drac
 			}
 			currentMouseX += moveStep
 
-			randomY := startY + (rng.Float64()*2 - 1)
+			randomY := startY + (rng.Float64()*6 - 3)
 			page.Mouse.MustMoveTo(currentMouseX, randomY)
 			captchaSleep(80*time.Millisecond, 40*time.Millisecond)
 		}
@@ -1704,17 +1741,26 @@ func solveAliyunCaptchaWithMetrics(parent context.Context, timestamp int64, drac
 
 // 生成贝塞尔曲线轨迹。
 func generateBezierTrack(rng *rand.Rand, startX, startY, endX, endY float64, steps int) []Point {
-	var track []Point
+	if steps < 2 {
+		steps = 2
+	}
 
-	cx1 := startX + (endX-startX)/4
 	rr := rng
 	if rr == nil {
 		rr = rand.New(rand.NewSource(time.Now().UnixNano()))
 	}
-	cy1 := startY + (rr.Float64()-0.5)*2
 
-	cx2 := startX + (endX-startX)*3/4
-	cy2 := startY + (rr.Float64()-0.5)*2
+	var track []Point
+
+	dx := endX - startX
+	dy := endY - startY
+
+	// 控制点随机化：同样的起终点，每次生成的轨迹都不同。
+	cx1 := startX + dx*(0.15+rr.Float64()*0.25)
+	cx2 := startX + dx*(0.55+rr.Float64()*0.35)
+	jitterY := 2.0 + rr.Float64()*6.0
+	cy1 := startY + dy*(0.10+rr.Float64()*0.40) + (rr.Float64()*2-1)*jitterY
+	cy2 := startY + dy*(0.60+rr.Float64()*0.30) + (rr.Float64()*2-1)*jitterY
 
 	for i := 0; i <= steps; i++ {
 		t := float64(i) / float64(steps)
@@ -1728,6 +1774,16 @@ func generateBezierTrack(rng *rand.Rand, startX, startY, endX, endY float64, ste
 			3*(1-t)*math.Pow(t, 2)*cy2 +
 			math.Pow(t, 3)*endY
 
+		// 轻微抖动：避免轨迹过于光滑/完全一致。
+		if i > 0 && i < steps {
+			x += (rr.Float64()*2 - 1) * 0.35
+			y += (rr.Float64()*2 - 1) * 0.90
+			// 保持 x 单调递增（拖动时更自然，也避免出现突然回拉）。
+			if len(track) > 0 && x < track[len(track)-1].X {
+				x = track[len(track)-1].X + rr.Float64()*0.25
+			}
+		}
+
 		track = append(track, Point{x, y})
 	}
 	return track
@@ -1739,10 +1795,36 @@ func executeTrack(rng *rand.Rand, page *rod.Page, track []Point) {
 	if rr == nil {
 		rr = rand.New(rand.NewSource(time.Now().UnixNano()))
 	}
-	for _, p := range track {
+	if page == nil || len(track) == 0 {
+		return
+	}
+	lastIdx := len(track) - 1
+	for i, p := range track {
 		page.Mouse.MustMoveTo(p.X, p.Y)
-		if rr.Intn(10) > 7 {
-			time.Sleep(time.Duration(1+rr.Intn(2)) * time.Millisecond)
+		if lastIdx <= 0 {
+			continue
 		}
+
+		progress := float64(i) / float64(lastIdx)
+		base := 3 * time.Millisecond
+		jitter := 4 * time.Millisecond
+		switch {
+		case progress < 0.25:
+			base = 5 * time.Millisecond
+			jitter = 5 * time.Millisecond
+		case progress < 0.85:
+			base = 2 * time.Millisecond
+			jitter = 4 * time.Millisecond
+		default:
+			base = 6 * time.Millisecond
+			jitter = 6 * time.Millisecond
+		}
+
+		// 偶尔短暂停顿一下，更像人类操作。
+		if rr.Intn(100) < 3 {
+			captchaSleep(time.Duration(25+rr.Intn(40))*time.Millisecond, 0)
+			continue
+		}
+		captchaSleep(base, jitter)
 	}
 }
