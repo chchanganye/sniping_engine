@@ -689,7 +689,12 @@ func (e *Engine) attemptWithAccount(ctx context.Context, target model.Target, ac
 		var err error
 		pre, updatedAcc, err = e.provider.Preflight(ctx, acc, target)
 		if err != nil {
-			failures, wait := e.bumpPreflightBackoff(target.ID, nowMs)
+			errAtMs := time.Now().UnixMilli()
+			minUntilMs := int64(0)
+			if target.Mode == model.TargetModeRush && target.RushAtMs > 0 && errAtMs < target.RushAtMs {
+				minUntilMs = target.RushAtMs
+			}
+			failures, wait, untilMs := e.bumpPreflightBackoff(target.ID, errAtMs, minUntilMs)
 			e.setError(target.ID, err)
 			if e.bus != nil {
 				e.bus.Log("warn", "预下单失败", map[string]any{
@@ -698,7 +703,7 @@ func (e *Engine) attemptWithAccount(ctx context.Context, target model.Target, ac
 					"error":      err.Error(),
 					"backoffMs":  wait.Milliseconds(),
 					"failures":   failures,
-					"retryAtMs":  nowMs + wait.Milliseconds(),
+					"retryAtMs":  untilMs,
 				})
 			}
 			return false
@@ -897,9 +902,9 @@ func (e *Engine) resetPreflightBackoff(targetID string) {
 	e.mu.Unlock()
 }
 
-func (e *Engine) bumpPreflightBackoff(targetID string, nowMs int64) (failures int, wait time.Duration) {
+func (e *Engine) bumpPreflightBackoff(targetID string, nowMs int64, minUntilMs int64) (failures int, wait time.Duration, untilMs int64) {
 	if e == nil || targetID == "" {
-		return 0, 0
+		return 0, 0, 0
 	}
 	if nowMs <= 0 {
 		nowMs = time.Now().UnixMilli()
@@ -925,12 +930,18 @@ func (e *Engine) bumpPreflightBackoff(targetID string, nowMs int64) (failures in
 	if wait > max {
 		wait = max
 	}
-	st.UntilMs = nowMs + wait.Milliseconds()
+	until := nowMs + wait.Milliseconds()
+	if minUntilMs > until {
+		until = minUntilMs
+		wait = time.Duration(until-nowMs) * time.Millisecond
+	}
+	st.UntilMs = until
 	e.preflightBackoff[targetID] = st
 	failures = st.Failures
+	untilMs = st.UntilMs
 	e.mu.Unlock()
 
-	return failures, wait
+	return failures, wait, untilMs
 }
 
 func (e *Engine) TestBuyOnce(ctx context.Context, targetID string, captchaVerifyParam string, opID string) (TestBuyResult, error) {
