@@ -196,11 +196,16 @@ export async function beEnginePreflight(targetId: string): Promise<EnginePreflig
 
 export async function beEngineTestBuy(targetId: string, captchaVerifyParam?: string, opId?: string): Promise<EngineTestBuyResult> {
   try {
-    const resp = await http.post<DataEnvelope<EngineTestBuyResult>>('/api/v1/engine/test-buy', {
-      targetId,
-      captchaVerifyParam: captchaVerifyParam?.trim() || undefined,
-      opId: opId?.trim() || undefined,
-    })
+    const resp = await http.post<DataEnvelope<EngineTestBuyResult>>(
+      '/api/v1/engine/test-buy',
+      {
+        targetId,
+        captchaVerifyParam: captchaVerifyParam?.trim() || undefined,
+        opId: opId?.trim() || undefined,
+      },
+      // 测试下单可能触发验证码求解/多次重试，超过默认 20s 很常见。
+      { timeout: 240000 },
+    )
     return resp.data.data
   } catch (e) {
     throw new Error(extractBackendErrorMessage(e, '测试抢购失败'))
@@ -266,7 +271,12 @@ export async function beCaptchaPoolStatus(): Promise<CaptchaPoolStatus> {
 }
 
 export async function beCaptchaPoolFill(count: number): Promise<{ added: number; failed: number }> {
-  const resp = await http.post<DataEnvelope<{ added: number; failed: number }>>('/api/v1/captcha/pool/fill', { count })
+  // 验证码生成可能超过默认 20s（尤其是低配机器/网络波动/多次重试），这里单独放宽超时。
+  const resp = await http.post<DataEnvelope<{ added: number; failed: number }>>(
+    '/api/v1/captcha/pool/fill',
+    { count },
+    { timeout: 240000 },
+  )
   return resp.data.data
 }
 
@@ -276,7 +286,12 @@ export async function beCaptchaPagesStatus(): Promise<CaptchaPagesStatus> {
 }
 
 export async function beCaptchaPagesRefresh(payload?: { forceRecreate?: boolean; ensurePages?: number }): Promise<{ refreshed: number; recreated: number; failed: number }> {
-  const resp = await http.post<DataEnvelope<{ refreshed: number; recreated: number; failed: number }>>('/api/v1/captcha/pages/refresh', payload ?? {})
+  // 刷新/重建页面池也可能超过默认 20s（首次下载浏览器/重建多个页面时），这里放宽超时。
+  const resp = await http.post<DataEnvelope<{ refreshed: number; recreated: number; failed: number }>>(
+    '/api/v1/captcha/pages/refresh',
+    payload ?? {},
+    { timeout: 240000 },
+  )
   return resp.data.data
 }
 
