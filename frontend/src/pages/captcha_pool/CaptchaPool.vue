@@ -6,7 +6,6 @@ import {
   beCaptchaPagesRefresh,
   beCaptchaPagesStatus,
   beCaptchaPagesStop,
-  beCaptchaPoolFillHuman,
   beCaptchaPoolFill,
   beCaptchaPoolStatus,
   type CaptchaPageInfo,
@@ -17,7 +16,6 @@ import {
 
 const loading = ref(false)
 const filling = ref(false)
-const humanFilling = ref(false)
 const refreshingPages = ref(false)
 const stoppingPages = ref(false)
 const status = ref<CaptchaPoolStatus | null>(null)
@@ -109,18 +107,13 @@ async function fill() {
   }
 }
 
-async function fillHuman() {
-  humanFilling.value = true
-  try {
-    ElMessage.info('请在弹出的浏览器页面完成验证码')
-    const res = await beCaptchaPoolFillHuman()
-    ElMessage.success(`人工补充完成：${res.added}`)
-    await load()
-  } catch (e) {
-    ElMessage.error(e instanceof Error ? e.message : '人工补充失败')
-  } finally {
-    humanFilling.value = false
+function fillHuman() {
+  const win = window.open('/api/v1/captcha/manual', '_blank', 'noopener,noreferrer')
+  if (!win) {
+    ElMessage.warning('浏览器拦截了弹窗，请允许弹窗后重试')
+    return
   }
+  ElMessage.info('已打开人工验证码页面，请在新窗口完成验证')
 }
 
 onMounted(() => {
@@ -168,11 +161,11 @@ onUnmounted(() => {
           <el-button type="primary" :loading="filling" @click="fill">开始补充</el-button>
         </el-form-item>
         <el-form-item>
-          <el-button type="warning" plain :loading="humanFilling" @click="fillHuman">人工补充</el-button>
+          <el-button type="warning" plain @click="fillHuman">人工补充</el-button>
         </el-form-item>
       </el-form>
       <div style="color: #909399">提示：补充会调用验证码引擎生成 verifyParam，并按“单条有效期”自动过期清理。</div>
-      <div style="color: #909399; margin-top: 6px">人工补充会在本机弹出验证码页面，请手动完成滑块验证。</div>
+      <div style="color: #909399; margin-top: 6px">人工补充会在当前浏览器打开新窗口，完成验证后自动入池。</div>
     </el-card>
 
     <el-card shadow="never" header="验证码页面池" style="margin-top: 12px">

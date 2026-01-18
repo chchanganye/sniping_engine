@@ -171,41 +171,6 @@ func (e *Engine) FillCaptchaPoolManual(ctx context.Context, count int) (added in
 	return added, failed, err
 }
 
-func (e *Engine) FillCaptchaPoolManualHuman(ctx context.Context) (added int, err error) {
-	if e == nil || e.captchaPool == nil {
-		return 0, errors.New("engine unavailable")
-	}
-	if e.bus != nil {
-		e.bus.Log("info", "验证码池：人工补充开始", nil)
-	}
-	param, solveErr := utils.SolveAliyunCaptchaManual(ctx)
-	if solveErr != nil {
-		if e.bus != nil {
-			e.bus.Log("warn", "验证码池：人工补充失败", map[string]any{"error": solveErr.Error()})
-		}
-		return 0, solveErr
-	}
-	param = strings.TrimSpace(param)
-	if param == "" {
-		err = errors.New("captcha solving returned empty result")
-		if e.bus != nil {
-			e.bus.Log("warn", "验证码池：人工补充失败", map[string]any{"error": err.Error()})
-		}
-		return 0, err
-	}
-	if _, ok := e.captchaPool.Add(param, time.Now().UnixMilli()); ok {
-		added = 1
-	}
-	if e.bus != nil {
-		fields := map[string]any{"added": added}
-		if e.captchaPool != nil {
-			fields["size"] = e.captchaPool.Size(time.Now().UnixMilli())
-		}
-		e.bus.Log("info", "验证码池：人工补充完成", fields)
-	}
-	return added, nil
-}
-
 func (e *Engine) fillCaptchaPool(ctx context.Context, count int, manual bool) (added int, failed int, err error) {
 	if e == nil || e.captchaPool == nil {
 		return 0, 0, errors.New("engine unavailable")
@@ -285,6 +250,26 @@ func (e *Engine) fillCaptchaPool(ctx context.Context, count int, manual bool) (a
 	}
 
 	return added, failed, nil
+}
+
+func (e *Engine) AddCaptchaVerifyParamManual(verifyParam string) (bool, error) {
+	if e == nil || e.captchaPool == nil {
+		return false, errors.New("engine unavailable")
+	}
+	param := strings.TrimSpace(verifyParam)
+	if param == "" {
+		return false, errors.New("verifyParam is required")
+	}
+	if _, ok := e.captchaPool.Add(param, time.Now().UnixMilli()); !ok {
+		return false, errors.New("failed to add verifyParam")
+	}
+	if e.bus != nil {
+		e.bus.Log("info", "验证码池：人工补充完成", map[string]any{
+			"added": 1,
+			"size":  e.captchaPool.Size(time.Now().UnixMilli()),
+		})
+	}
+	return true, nil
 }
 
 func (e *Engine) AcquireCaptchaVerifyParam(ctx context.Context) (string, bool) {

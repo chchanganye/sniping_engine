@@ -74,10 +74,11 @@ func (s *Server) Handler() http.Handler {
 	api.HandleFunc("/api/v1/captcha/state", s.handleCaptchaState)
 	api.HandleFunc("/api/v1/captcha/pool", s.handleCaptchaPool)
 	api.HandleFunc("/api/v1/captcha/pool/fill", s.handleCaptchaPoolFill)
-	api.HandleFunc("/api/v1/captcha/pool/fill-human", s.handleCaptchaPoolFillHuman)
 	api.HandleFunc("/api/v1/captcha/pages", s.handleCaptchaPages)
 	api.HandleFunc("/api/v1/captcha/pages/refresh", s.handleCaptchaPagesRefresh)
 	api.HandleFunc("/api/v1/captcha/pages/stop", s.handleCaptchaPagesStop)
+	api.HandleFunc("/api/v1/captcha/manual", s.handleCaptchaManualPage)
+	api.HandleFunc("/api/v1/captcha/manual/submit", s.handleCaptchaManualSubmit)
 	api.HandleFunc("/api/v1/settings/email", s.handleEmailSettings)
 	api.HandleFunc("/api/v1/settings/email/test", s.handleEmailTest)
 	api.HandleFunc("/api/v1/settings/notify", s.handleNotifySettings)
@@ -145,23 +146,6 @@ func (s *Server) handleCaptchaPoolFill(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	writeJSON(w, http.StatusOK, map[string]any{"data": map[string]any{"added": added, "failed": failed}})
-}
-
-func (s *Server) handleCaptchaPoolFillHuman(w http.ResponseWriter, r *http.Request) {
-	if r.Method != http.MethodPost {
-		writeJSON(w, http.StatusMethodNotAllowed, map[string]any{"error": "method not allowed"})
-		return
-	}
-	if s.engine == nil {
-		writeJSON(w, http.StatusInternalServerError, map[string]any{"error": "engine unavailable"})
-		return
-	}
-	added, err := s.engine.FillCaptchaPoolManualHuman(r.Context())
-	if err != nil {
-		writeJSON(w, http.StatusInternalServerError, map[string]any{"error": err.Error()})
-		return
-	}
-	writeJSON(w, http.StatusOK, map[string]any{"data": map[string]any{"added": added}})
 }
 
 func (s *Server) handleCaptchaPages(w http.ResponseWriter, r *http.Request) {

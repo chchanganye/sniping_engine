@@ -130,6 +130,11 @@ function friendlyLogMessage(msg: string, fields?: Record<string, any>) {
     const reason = normalizeErrorText(String(fields?.error ?? '')) || '未知错误'
     return `验证码池手动补充失败：新增${added}，失败${failed}，原因：${reason}`
   }
+  if (m === '验证码池：人工补充完成') {
+    const added = fields?.added != null ? String(fields.added) : '-'
+    const size = fields?.size != null ? String(fields.size) : ''
+    return size ? `验证码池人工补充完成：新增${added}（当前${size}）` : `验证码池人工补充完成：新增${added}`
+  }
 
   if (m === 'http request') return `正在发送网络请求：${summarizeRequest(fields) || '请求中…'}`
   if (m === 'proxy request') return `正在代理请求：${summarizeRequest(fields) || '请求中…'}`

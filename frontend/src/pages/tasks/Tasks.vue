@@ -1,8 +1,9 @@
 <script setup lang="ts">
-import { computed, onMounted, reactive } from 'vue'
+import { computed, onMounted, reactive, ref } from 'vue'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import { storeToRefs } from 'pinia'
 import { Delete, Lightning, Refresh } from '@element-plus/icons-vue'
+import dayjs from 'dayjs'
 import { useAccountsStore } from '@/stores/accounts'
 import { useProgressStore } from '@/stores/progress'
 import { useTasksStore } from '@/stores/tasks'
@@ -15,6 +16,8 @@ const progressStore = useProgressStore()
 
 const { accounts } = storeToRefs(accountsStore)
 const { tasks, engineRunning, engineLoading, loading, captchaLoading } = storeToRefs(tasksStore)
+
+const settingNoon = ref(false)
 
 onMounted(() => {
   void accountsStore.ensureLoaded()
@@ -69,6 +72,47 @@ async function remove(row: Task) {
   await ElMessageBox.confirm(`确认删除目标任务：${row.goodsTitle}？`, '提示', { type: 'warning' }).catch(() => null)
   await tasksStore.removeTask(row.id)
   ElMessage.success('已删除')
+}
+
+function nextNoonMs(): number {
+  const now = new Date()
+  const target = new Date(now)
+  target.setHours(12, 0, 0, 0)
+  if (target.getTime() <= now.getTime()) {
+    target.setDate(target.getDate() + 1)
+  }
+  return target.getTime()
+}
+
+async function setAllRushAtNoon() {
+  if (tasks.value.length === 0) {
+    ElMessage.warning('暂无任务')
+    return
+  }
+  const rushTasks = tasks.value.filter((t) => t.mode === 'rush')
+  if (rushTasks.length === 0) {
+    ElMessage.warning('暂无抢购任务')
+    return
+  }
+
+  const noonMs = nextNoonMs()
+  const label = dayjs(noonMs).format('YYYY-MM-DD HH:mm')
+  const confirmed = await ElMessageBox.confirm(`确认将所有抢购任务时间设置为 ${label}？`, '提示', { type: 'warning' }).catch(() => null)
+  if (!confirmed) return
+
+  settingNoon.value = true
+  try {
+    for (const task of rushTasks) {
+      task.rushAtMs = noonMs
+      await tasksStore.updateTask(task.id, { rushAtMs: noonMs })
+    }
+    ElMessage.success(`已设置 ${rushTasks.length} 个抢购任务为 ${label}`)
+  } catch (e) {
+    ElMessage.error(e instanceof Error ? e.message : '设置失败')
+  } finally {
+    settingNoon.value = false
+    void tasksStore.refresh().catch(() => null)
+  }
 }
 
 async function testBuy(row: Task) {
@@ -154,6 +198,7 @@ function statusMeta(row: Task) {
           <el-button :loading="loading || captchaLoading" :icon="Refresh" @click="refreshAll(true)">刷新</el-button>
           <el-button type="success" :loading="engineLoading" @click="enableAll">开启全部</el-button>
           <el-button type="warning" :loading="engineLoading" @click="disableAll">停止全部</el-button>
+          <el-button type="primary" :loading="settingNoon" :disabled="engineRunning" @click="setAllRushAtNoon">一键设为12点</el-button>
         </el-space>
       </div>
 
