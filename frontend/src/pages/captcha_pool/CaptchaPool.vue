@@ -32,6 +32,11 @@ const manualDialogVisible = ref(false)
 const manualLoading = ref(false)
 const manualSubmitting = ref(false)
 const manualStatus = ref('')
+const manualBatchCount = ref(1)
+const manualTargetCount = ref(1)
+const manualCompleted = ref(0)
+const manualRunning = ref(false)
+const manualConfig = ref<CaptchaManualConfig | null>(null)
 const status = ref<CaptchaPoolStatus | null>(null)
 const pages = ref<CaptchaPagesStatus | null>(null)
 const nowMs = ref(Date.now())
@@ -44,6 +49,13 @@ let manualCaptchaInstance: { destroy?: () => void } | null = null
 
 const items = computed<CaptchaPoolItemView[]>(() => status.value?.items ?? [])
 const pageList = computed<CaptchaPageInfo[]>(() => pages.value?.pages ?? [])
+const manualProgressLabel = computed(() => {
+  const target = manualRunning.value ? manualTargetCount.value : normalizeManualCount(manualBatchCount.value)
+  if (manualRunning.value) {
+    return `已完成 ${manualCompleted.value} / ${target}`
+  }
+  return `目标 ${target} 条`
+})
 
 function formatMs(ms?: number): string {
   if (!ms) return '-'
@@ -68,6 +80,13 @@ function leftSeconds(expiresAtMs: number): number {
   const left = expiresAtMs - nowMs.value
   if (left <= 0) return 0
   return Math.ceil(left / 1000)
+}
+
+function normalizeManualCount(value: number): number {
+  const raw = Math.floor(Number(value || 1))
+  if (!Number.isFinite(raw) || raw <= 0) return 1
+  if (raw > 50) return 50
+  return raw
 }
 
 async function load() {
@@ -152,35 +171,57 @@ function destroyManualCaptcha() {
   if (container) container.innerHTML = ''
 }
 
+function triggerManualCaptcha() {
+  const btn = document.getElementById('manual-captcha-button') as HTMLButtonElement | null
+  if (!btn || btn.disabled) return
+  btn.click()
+}
+
 async function submitManualCaptcha(verifyParam: string) {
   if (!verifyParam) {
     manualStatus.value = '未获取到验证码结果'
     return
   }
+  if (!manualRunning.value) {
+    manualTargetCount.value = normalizeManualCount(manualBatchCount.value)
+    manualCompleted.value = 0
+    manualRunning.value = true
+  }
+  const nextIndex = manualCompleted.value + 1
   manualSubmitting.value = true
-  manualStatus.value = '验证成功，正在提交...'
+  manualStatus.value = `验证成功，正在提交（${nextIndex} / ${manualTargetCount.value}）...`
   try {
     await beCaptchaManualSubmit(verifyParam)
-    ElMessage.success('人工补充成功')
-    manualStatus.value = '已入池'
-    manualDialogVisible.value = false
-    await load()
+    manualCompleted.value = nextIndex
+    if (manualCompleted.value >= manualTargetCount.value) {
+      manualStatus.value = `已完成 ${manualCompleted.value} / ${manualTargetCount.value}`
+      ElMessage.success(`人工补充完成：已新增 ${manualCompleted.value} 条`)
+      manualDialogVisible.value = false
+      manualRunning.value = false
+      await load()
+      return
+    }
+    manualStatus.value = `已完成 ${manualCompleted.value} / ${manualTargetCount.value}，准备下一条...`
   } catch (e) {
     const msg = e instanceof Error ? e.message : '提交失败'
     manualStatus.value = `提交失败：${msg}`
     ElMessage.error(msg)
+    return
   } finally {
     manualSubmitting.value = false
   }
+  if (manualDialogVisible.value) {
+    await prepareManualCaptcha(true, `已完成 ${manualCompleted.value} / ${manualTargetCount.value}，请继续验证`)
+  }
 }
 
-function initManualCaptcha(cfg: CaptchaManualConfig) {
+function initManualCaptcha(cfg: CaptchaManualConfig, statusText?: string) {
   destroyManualCaptcha()
   if (typeof window.initAliyunCaptcha !== 'function') {
     manualStatus.value = '验证码脚本加载失败'
     return
   }
-  manualStatus.value = '请点击按钮开始验证'
+  manualStatus.value = statusText || '请点击按钮开始验证'
   window.initAliyunCaptcha({
     SceneId: cfg.sceneId,
     mode: 'popup',
@@ -199,16 +240,40 @@ function initManualCaptcha(cfg: CaptchaManualConfig) {
   })
 }
 
+async function prepareManualCaptcha(autoOpen: boolean, statusText?: string) {
+  if (!manualConfig.value) return
+  await nextTick()
+  initManualCaptcha(manualConfig.value, statusText)
+  if (autoOpen) {
+    window.setTimeout(() => {
+      triggerManualCaptcha()
+    }, 150)
+  }
+}
+
+function onManualStartClick() {
+  if (manualRunning.value) return
+  manualTargetCount.value = normalizeManualCount(manualBatchCount.value)
+  manualCompleted.value = 0
+  manualRunning.value = true
+  manualStatus.value = `请完成验证（0 / ${manualTargetCount.value}）`
+}
+
 async function fillHuman() {
   manualDialogVisible.value = true
   manualLoading.value = true
+  manualSubmitting.value = false
+  manualRunning.value = false
+  manualCompleted.value = 0
+  manualBatchCount.value = normalizeManualCount(addCount.value)
+  manualTargetCount.value = normalizeManualCount(manualBatchCount.value)
   manualStatus.value = '加载验证码配置中...'
   try {
     const cfg = await beCaptchaManualConfig()
+    manualConfig.value = cfg
     window.AliyunCaptchaConfig = { region: cfg.region, prefix: cfg.prefix }
     await ensureCaptchaScript()
-    await nextTick()
-    initManualCaptcha(cfg)
+    await prepareManualCaptcha(false)
   } catch (e) {
     const msg = e instanceof Error ? e.message : '加载失败'
     manualStatus.value = msg
@@ -221,6 +286,10 @@ async function fillHuman() {
 function onManualDialogClosed() {
   destroyManualCaptcha()
   manualStatus.value = ''
+  manualSubmitting.value = false
+  manualRunning.value = false
+  manualCompleted.value = 0
+  manualTargetCount.value = normalizeManualCount(manualBatchCount.value)
 }
 
 onMounted(() => {
@@ -344,18 +413,31 @@ onUnmounted(() => {
       </el-table>
     </el-card>
 
-    <el-dialog v-model="manualDialogVisible" title="人工补充验证码" width="420px" @closed="onManualDialogClosed">
+    <el-dialog v-model="manualDialogVisible" title="人工补充验证码" width="420px" class="manual-dialog" @closed="onManualDialogClosed">
       <div v-loading="manualLoading">
-        <div id="manual-captcha-container" style="min-height: 140px" />
+        <div class="manual-toolbar">
+          <span class="manual-label">补充条数</span>
+          <el-input-number
+            v-model="manualBatchCount"
+            :min="1"
+            :max="50"
+            :step="1"
+            size="small"
+            :disabled="manualRunning || manualLoading || manualSubmitting"
+          />
+          <span class="manual-progress">{{ manualProgressLabel }}</span>
+        </div>
+        <div id="manual-captcha-container" class="manual-captcha" />
         <el-button
           id="manual-captcha-button"
           type="primary"
-          style="width: 100%; margin-top: 10px"
+          class="manual-button"
           :disabled="manualLoading || manualSubmitting"
+          @click="onManualStartClick"
         >
           安全验证
         </el-button>
-        <div style="color: #909399; margin-top: 8px; min-height: 18px">
+        <div class="manual-status">
           {{ manualStatus || ' ' }}
         </div>
       </div>
@@ -368,5 +450,35 @@ onUnmounted(() => {
   min-height: 36px;
   display: flex;
   align-items: center;
+}
+.manual-dialog :deep(.el-dialog__body) {
+  padding-top: 12px;
+}
+.manual-toolbar {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  margin-bottom: 6px;
+}
+.manual-label {
+  color: #606266;
+  font-size: 12px;
+}
+.manual-progress {
+  margin-left: auto;
+  color: #909399;
+  font-size: 12px;
+}
+.manual-captcha {
+  min-height: 80px;
+}
+.manual-button {
+  width: 100%;
+  margin-top: 8px;
+}
+.manual-status {
+  color: #909399;
+  margin-top: 6px;
+  min-height: 18px;
 }
 </style>
