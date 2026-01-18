@@ -1,23 +1,37 @@
 <script setup lang="ts">
-import { computed, onMounted, onUnmounted, ref } from 'vue'
+import { computed, nextTick, onMounted, onUnmounted, ref } from 'vue'
 import { ElMessage } from 'element-plus'
 import dayjs from 'dayjs'
 import {
+  beCaptchaManualConfig,
+  beCaptchaManualSubmit,
   beCaptchaPagesRefresh,
   beCaptchaPagesStatus,
   beCaptchaPagesStop,
   beCaptchaPoolFill,
   beCaptchaPoolStatus,
+  type CaptchaManualConfig,
   type CaptchaPageInfo,
   type CaptchaPagesStatus,
   type CaptchaPoolItemView,
   type CaptchaPoolStatus,
 } from '@/services/backend'
 
+declare global {
+  interface Window {
+    AliyunCaptchaConfig?: { region: string; prefix: string }
+    initAliyunCaptcha?: (options: any) => void
+  }
+}
+
 const loading = ref(false)
 const filling = ref(false)
 const refreshingPages = ref(false)
 const stoppingPages = ref(false)
+const manualDialogVisible = ref(false)
+const manualLoading = ref(false)
+const manualSubmitting = ref(false)
+const manualStatus = ref('')
 const status = ref<CaptchaPoolStatus | null>(null)
 const pages = ref<CaptchaPagesStatus | null>(null)
 const nowMs = ref(Date.now())
@@ -25,6 +39,8 @@ const addCount = ref(2)
 
 let pollTimer: number | undefined
 let clockTimer: number | undefined
+let captchaScriptPromise: Promise<void> | null = null
+let manualCaptchaInstance: { destroy?: () => void } | null = null
 
 const items = computed<CaptchaPoolItemView[]>(() => status.value?.items ?? [])
 const pageList = computed<CaptchaPageInfo[]>(() => pages.value?.pages ?? [])
@@ -107,13 +123,104 @@ async function fill() {
   }
 }
 
-function fillHuman() {
-  const win = window.open('/api/v1/captcha/manual', '_blank', 'noopener,noreferrer')
-  if (!win) {
-    ElMessage.warning('浏览器拦截了弹窗，请允许弹窗后重试')
+async function ensureCaptchaScript(): Promise<void> {
+  if (typeof window.initAliyunCaptcha === 'function') return
+  if (!captchaScriptPromise) {
+    captchaScriptPromise = new Promise<void>((resolve, reject) => {
+      const script = document.createElement('script')
+      script.src = 'https://o.alicdn.com/captcha-frontend/aliyunCaptcha/AliyunCaptcha.js'
+      script.async = true
+      script.onload = () => resolve()
+      script.onerror = () => reject(new Error('验证码脚本加载失败'))
+      document.head.appendChild(script)
+    })
+  }
+  try {
+    await captchaScriptPromise
+  } catch (e) {
+    captchaScriptPromise = null
+    throw e
+  }
+}
+
+function destroyManualCaptcha() {
+  if (manualCaptchaInstance && typeof manualCaptchaInstance.destroy === 'function') {
+    manualCaptchaInstance.destroy()
+  }
+  manualCaptchaInstance = null
+  const container = document.getElementById('manual-captcha-container')
+  if (container) container.innerHTML = ''
+}
+
+async function submitManualCaptcha(verifyParam: string) {
+  if (!verifyParam) {
+    manualStatus.value = '未获取到验证码结果'
     return
   }
-  ElMessage.info('已打开人工验证码页面，请在新窗口完成验证')
+  manualSubmitting.value = true
+  manualStatus.value = '验证成功，正在提交...'
+  try {
+    await beCaptchaManualSubmit(verifyParam)
+    ElMessage.success('人工补充成功')
+    manualStatus.value = '已入池'
+    manualDialogVisible.value = false
+    await load()
+  } catch (e) {
+    const msg = e instanceof Error ? e.message : '提交失败'
+    manualStatus.value = `提交失败：${msg}`
+    ElMessage.error(msg)
+  } finally {
+    manualSubmitting.value = false
+  }
+}
+
+function initManualCaptcha(cfg: CaptchaManualConfig) {
+  destroyManualCaptcha()
+  if (typeof window.initAliyunCaptcha !== 'function') {
+    manualStatus.value = '验证码脚本加载失败'
+    return
+  }
+  manualStatus.value = '请点击按钮开始验证'
+  window.initAliyunCaptcha({
+    SceneId: cfg.sceneId,
+    mode: 'popup',
+    element: '#manual-captcha-container',
+    button: '#manual-captcha-button',
+    success: (captchaVerifyParam: string) => {
+      void submitManualCaptcha(captchaVerifyParam)
+    },
+    fail: () => {
+      manualStatus.value = '验证失败，请重试'
+    },
+    getInstance: (instance: { destroy?: () => void }) => {
+      manualCaptchaInstance = instance
+    },
+    rem: 1,
+  })
+}
+
+async function fillHuman() {
+  manualDialogVisible.value = true
+  manualLoading.value = true
+  manualStatus.value = '加载验证码配置中...'
+  try {
+    const cfg = await beCaptchaManualConfig()
+    window.AliyunCaptchaConfig = { region: cfg.region, prefix: cfg.prefix }
+    await ensureCaptchaScript()
+    await nextTick()
+    initManualCaptcha(cfg)
+  } catch (e) {
+    const msg = e instanceof Error ? e.message : '加载失败'
+    manualStatus.value = msg
+    ElMessage.error(msg)
+  } finally {
+    manualLoading.value = false
+  }
+}
+
+function onManualDialogClosed() {
+  destroyManualCaptcha()
+  manualStatus.value = ''
 }
 
 onMounted(() => {
@@ -165,7 +272,7 @@ onUnmounted(() => {
         </el-form-item>
       </el-form>
       <div style="color: #909399">提示：补充会调用验证码引擎生成 verifyParam，并按“单条有效期”自动过期清理。</div>
-      <div style="color: #909399; margin-top: 6px">人工补充会在当前浏览器打开新窗口，完成验证后自动入池。</div>
+      <div style="color: #909399; margin-top: 6px">人工补充会在当前页面弹出验证码滑块，完成验证后自动入池。</div>
     </el-card>
 
     <el-card shadow="never" header="验证码页面池" style="margin-top: 12px">
@@ -236,6 +343,23 @@ onUnmounted(() => {
         </el-table-column>
       </el-table>
     </el-card>
+
+    <el-dialog v-model="manualDialogVisible" title="人工补充验证码" width="420px" @closed="onManualDialogClosed">
+      <div v-loading="manualLoading">
+        <div id="manual-captcha-container" style="min-height: 140px" />
+        <el-button
+          id="manual-captcha-button"
+          type="primary"
+          style="width: 100%; margin-top: 10px"
+          :disabled="manualLoading || manualSubmitting"
+        >
+          安全验证
+        </el-button>
+        <div style="color: #909399; margin-top: 8px; min-height: 18px">
+          {{ manualStatus || ' ' }}
+        </div>
+      </div>
+    </el-dialog>
   </div>
 </template>
 

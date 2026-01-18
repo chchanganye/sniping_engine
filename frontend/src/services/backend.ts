@@ -120,6 +120,12 @@ export interface CaptchaStopAllResult {
   busy: number
 }
 
+export interface CaptchaManualConfig {
+  sceneId: string
+  region: string
+  prefix: string
+}
+
 export interface CaptchaPoolSettings {
   warmupSeconds: number
   poolSize: number
@@ -302,6 +308,16 @@ export async function beCaptchaPagesRefresh(payload?: { forceRecreate?: boolean;
 
 export async function beCaptchaPagesStop(): Promise<CaptchaStopAllResult> {
   const resp = await http.post<DataEnvelope<CaptchaStopAllResult>>('/api/v1/captcha/pages/stop', {})
+  return resp.data.data
+}
+
+export async function beCaptchaManualConfig(): Promise<CaptchaManualConfig> {
+  const resp = await http.get<DataEnvelope<CaptchaManualConfig>>('/api/v1/captcha/manual/config')
+  return resp.data.data
+}
+
+export async function beCaptchaManualSubmit(verifyParam: string): Promise<{ added: number }> {
+  const resp = await http.post<DataEnvelope<{ added: number }>>('/api/v1/captcha/manual/submit', { verifyParam })
   return resp.data.data
 }
 

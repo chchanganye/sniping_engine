@@ -20,9 +20,9 @@ var (
 )
 
 type captchaManualConfig struct {
-	SceneID string
-	Region  string
-	Prefix  string
+	SceneID string `json:"sceneId"`
+	Region  string `json:"region"`
+	Prefix  string `json:"prefix"`
 }
 
 var captchaManualPageTpl = template.Must(template.New("captcha-manual").Parse(`<!doctype html>
@@ -168,6 +168,24 @@ func (s *Server) handleCaptchaManualPage(w http.ResponseWriter, r *http.Request)
 		writeJSON(w, http.StatusInternalServerError, map[string]any{"error": err.Error()})
 		return
 	}
+}
+
+func (s *Server) handleCaptchaManualConfig(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		writeJSON(w, http.StatusMethodNotAllowed, map[string]any{"error": "method not allowed"})
+		return
+	}
+
+	ctx, cancel := context.WithTimeout(r.Context(), 10*time.Second)
+	defer cancel()
+
+	cfg, err := fetchCaptchaManualConfig(ctx)
+	if err != nil {
+		writeJSON(w, http.StatusBadGateway, map[string]any{"error": err.Error()})
+		return
+	}
+
+	writeJSON(w, http.StatusOK, map[string]any{"data": cfg})
 }
 
 type captchaManualSubmitPayload struct {

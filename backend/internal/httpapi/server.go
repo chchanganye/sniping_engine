@@ -78,6 +78,7 @@ func (s *Server) Handler() http.Handler {
 	api.HandleFunc("/api/v1/captcha/pages/refresh", s.handleCaptchaPagesRefresh)
 	api.HandleFunc("/api/v1/captcha/pages/stop", s.handleCaptchaPagesStop)
 	api.HandleFunc("/api/v1/captcha/manual", s.handleCaptchaManualPage)
+	api.HandleFunc("/api/v1/captcha/manual/config", s.handleCaptchaManualConfig)
 	api.HandleFunc("/api/v1/captcha/manual/submit", s.handleCaptchaManualSubmit)
 	api.HandleFunc("/api/v1/settings/email", s.handleEmailSettings)
 	api.HandleFunc("/api/v1/settings/email/test", s.handleEmailTest)

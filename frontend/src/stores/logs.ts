@@ -149,11 +149,30 @@ function friendlyLogMessage(msg: string, fields?: Record<string, any>) {
   if (m === 'order created') return `下单成功${formatIds(fields)}`
   if (m === 'order created (test)') return `测试下单成功${formatIds(fields)}`
 
-  if (m === 'email sent') return `通知邮件已发送${fields?.to ? `（${String(fields.to)}）` : ''}${formatIds(fields)}`
-  if (m === 'email send failed') return `邮件发送失败：${normalizeErrorText(String(fields?.error ?? '')) || '未知错误'}${formatIds(fields)}`
-  if (m === 'email settings invalid') return `邮件配置无效：${normalizeErrorText(String(fields?.error ?? '')) || '请检查设置'}`
-  if (m === 'load email settings failed') return `读取邮件配置失败：${normalizeErrorText(String(fields?.error ?? '')) || '未知错误'}`
-  if (m === 'email notify dropped (queue full)') return `邮件通知丢弃：队列已满${formatIds(fields)}`
+  if (m === 'email sent' || m === '通知邮件已发送') {
+    const count = fields?.count != null ? String(fields.count) : ''
+    const summary = count ? `（汇总${count}条）` : ''
+    const to = fields?.to ? `（${String(fields.to)}）` : ''
+    return `通知邮件已发送${summary}${to}${formatIds(fields)}`
+  }
+  if (m === 'email send failed' || m === '邮件发送失败') {
+    const count = fields?.count != null ? String(fields.count) : ''
+    const summary = count ? `（汇总${count}条）` : ''
+    return `邮件发送失败${summary}：${normalizeErrorText(String(fields?.error ?? '')) || '未知错误'}${formatIds(fields)}`
+  }
+  if (m === '邮件通知未启用') {
+    const count = fields?.count != null ? String(fields.count) : ''
+    return count ? `邮件通知未启用（已忽略${count}条结果）` : '邮件通知未启用'
+  }
+  if (m === 'email settings invalid' || m === '邮件配置无效') {
+    return `邮件配置无效：${normalizeErrorText(String(fields?.error ?? '')) || '请检查设置'}`
+  }
+  if (m === 'load email settings failed' || m === '读取邮件配置失败') {
+    return `读取邮件配置失败：${normalizeErrorText(String(fields?.error ?? '')) || '未知错误'}`
+  }
+  if (m === 'email notify dropped (queue full)' || m === '邮件通知丢弃：队列已满') {
+    return `邮件通知丢弃：队列已满${formatIds(fields)}`
+  }
 
   // 已经是中文/或无法识别：尽量把常见错误码转成中文
   const normalized = normalizeErrorText(m)
