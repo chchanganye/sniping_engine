@@ -230,6 +230,8 @@ var (
 	captchaStopCtx    context.Context
 	captchaStopCancel context.CancelFunc
 
+	captchaManualRunning atomic.Bool
+
 	captchaSolveCount    atomic.Int64
 	captchaSolveTotalMs  atomic.Int64
 	captchaLastSolveAtMs atomic.Int64
@@ -568,45 +570,55 @@ func getCaptchaBrowser() (*rod.Browser, error) {
 		return captchaBrowser, nil
 	}
 
-	detectSystemChromeBin := func() string {
-		if v := strings.TrimSpace(os.Getenv("ROD_BROWSER_BIN")); v != "" {
-			if _, err := os.Stat(v); err == nil {
-				return v
-			}
-		}
-		if v := strings.TrimSpace(os.Getenv("SNIPING_ENGINE_CHROME_BIN")); v != "" {
-			if _, err := os.Stat(v); err == nil {
-				return v
-			}
-		}
+	b, l, err := launchCaptchaBrowser(captchaHeadlessMode())
+	if err != nil {
+		return nil, err
+	}
+	captchaBrowser = b
+	captchaBrowserLauncher = l
+	return captchaBrowser, nil
+}
 
-		candidates := []string{
-			"/usr/bin/chromium",
-			"/usr/bin/chromium-browser",
-			"/usr/bin/google-chrome",
-			"/usr/bin/google-chrome-stable",
+func detectSystemChromeBin() string {
+	if v := strings.TrimSpace(os.Getenv("ROD_BROWSER_BIN")); v != "" {
+		if _, err := os.Stat(v); err == nil {
+			return v
 		}
-		for _, p := range candidates {
-			if _, err := os.Stat(p); err == nil {
-				return p
-			}
+	}
+	if v := strings.TrimSpace(os.Getenv("SNIPING_ENGINE_CHROME_BIN")); v != "" {
+		if _, err := os.Stat(v); err == nil {
+			return v
 		}
-		if p, err := exec.LookPath("chromium"); err == nil && strings.TrimSpace(p) != "" {
-			return p
-		}
-		if p, err := exec.LookPath("chromium-browser"); err == nil && strings.TrimSpace(p) != "" {
-			return p
-		}
-		if p, err := exec.LookPath("google-chrome"); err == nil && strings.TrimSpace(p) != "" {
-			return p
-		}
-		if p, err := exec.LookPath("google-chrome-stable"); err == nil && strings.TrimSpace(p) != "" {
-			return p
-		}
-		return ""
 	}
 
-	l := launcher.New().Headless(captchaHeadlessMode())
+	candidates := []string{
+		"/usr/bin/chromium",
+		"/usr/bin/chromium-browser",
+		"/usr/bin/google-chrome",
+		"/usr/bin/google-chrome-stable",
+	}
+	for _, p := range candidates {
+		if _, err := os.Stat(p); err == nil {
+			return p
+		}
+	}
+	if p, err := exec.LookPath("chromium"); err == nil && strings.TrimSpace(p) != "" {
+		return p
+	}
+	if p, err := exec.LookPath("chromium-browser"); err == nil && strings.TrimSpace(p) != "" {
+		return p
+	}
+	if p, err := exec.LookPath("google-chrome"); err == nil && strings.TrimSpace(p) != "" {
+		return p
+	}
+	if p, err := exec.LookPath("google-chrome-stable"); err == nil && strings.TrimSpace(p) != "" {
+		return p
+	}
+	return ""
+}
+
+func launchCaptchaBrowser(headless bool) (*rod.Browser, *launcher.Launcher, error) {
+	l := launcher.New().Headless(headless)
 	if runtime.GOOS == "linux" {
 		l = l.NoSandbox(true).Set("disable-dev-shm-usage")
 	}
@@ -616,18 +628,15 @@ func getCaptchaBrowser() (*rod.Browser, error) {
 	u, err := l.Launch()
 	if err != nil {
 		l.Kill()
-		return nil, err
+		return nil, nil, err
 	}
 
 	b := rod.New().ControlURL(u)
 	if err := b.Connect(); err != nil {
 		l.Kill()
-		return nil, err
+		return nil, nil, err
 	}
-
-	captchaBrowser = b
-	captchaBrowserLauncher = l
-	return captchaBrowser, nil
+	return b, l, nil
 }
 
 func newCaptchaHTTPClient() *http.Client {
@@ -686,6 +695,24 @@ func captchaMaxSolveAttempts() int {
 		return 10
 	}
 	return n
+}
+
+func captchaManualTimeout() time.Duration {
+	v := strings.TrimSpace(os.Getenv("SNIPING_ENGINE_CAPTCHA_MANUAL_TIMEOUT"))
+	if v == "" {
+		return 8 * time.Minute
+	}
+	n, err := strconv.Atoi(v)
+	if err != nil {
+		return 8 * time.Minute
+	}
+	if n <= 0 {
+		return 8 * time.Minute
+	}
+	if n > 3600 {
+		n = 3600
+	}
+	return time.Duration(n) * time.Second
 }
 
 func captchaSleep(base time.Duration, jitter time.Duration) {
@@ -752,6 +779,111 @@ func StopAllCaptchaFetching() CaptchaStopAllResult {
 	captchaStopMu.Unlock()
 
 	return CaptchaStopAllResult{AtMs: nowMs, Busy: st.Busy}
+}
+
+func SolveAliyunCaptchaManual(parent context.Context) (string, error) {
+	if !captchaManualRunning.CompareAndSwap(false, true) {
+		return "", errors.New("已有人工验证码在进行中")
+	}
+	defer captchaManualRunning.Store(false)
+
+	ctx, cancel := context.WithTimeout(parent, captchaManualTimeout())
+	defer cancel()
+
+	browser, launcher, err := launchCaptchaBrowser(false)
+	if err != nil {
+		return "", err
+	}
+	defer func() {
+		if browser != nil {
+			_ = browser.Close()
+		}
+		if launcher != nil {
+			launcher.Kill()
+		}
+	}()
+
+	incognito, err := browser.Incognito()
+	if err != nil {
+		return "", err
+	}
+	defer func() {
+		_ = incognito.Close()
+	}()
+
+	var page *rod.Page
+	if err := rod.Try(func() {
+		page = stealth.MustPage(incognito)
+		page.MustEmulate(devices.IPhoneX)
+	}); err != nil {
+		return "", err
+	}
+
+	p := page.Context(ctx)
+	_ = proto.NetworkEnable{}.Call(p)
+	_ = proto.NetworkSetCacheDisabled{CacheDisabled: true}.Call(p)
+
+	verifyResultCh := make(chan string, 10)
+	router := page.HijackRequests()
+	router.MustAdd("*captcha-open.aliyuncs.com*", func(ctx *rod.Hijack) {
+		_ = ctx.LoadResponse(captchaHTTPClient, true)
+		body := ctx.Response.Payload().Body
+
+		var res AliResult
+		if json.Unmarshal(body, &res) != nil {
+			return
+		}
+		if res.Result.VerifyResult == nil {
+			return
+		}
+		if *res.Result.VerifyResult && res.Result.SecurityToken != "" {
+			sceneID := res.Result.SceneId
+			output := OutputResult{
+				CertifyId:     res.Result.CertifyId,
+				SceneId:       sceneID,
+				IsSign:        true,
+				SecurityToken: res.Result.SecurityToken,
+			}
+			orderedJSON, _ := json.Marshal(output)
+			jsonBase64 := base64.StdEncoding.EncodeToString(orderedJSON)
+			select {
+			case verifyResultCh <- jsonBase64:
+			default:
+			}
+			return
+		}
+		if !*res.Result.VerifyResult {
+			select {
+			case verifyResultCh <- "":
+			default:
+			}
+		}
+	})
+
+	go router.Run()
+	defer func() { _ = router.Stop() }()
+
+	if err := navigateCaptchaPage(p, aliyunCaptchaTargetURL); err != nil {
+		return "", err
+	}
+	_ = proto.PageBringToFront{}.Call(p)
+
+	failCount := 0
+	for {
+		select {
+		case res := <-verifyResultCh:
+			if res != "" {
+				return res, nil
+			}
+			failCount++
+			if failCount >= 3 {
+				_ = navigateCaptchaPage(p, aliyunCaptchaTargetURL)
+				failCount = 0
+			}
+		case <-ctx.Done():
+			return "", errors.New("人工验证码超时")
+		}
+	}
 }
 
 func GetCaptchaPagesStatus() CaptchaPagesStatus {

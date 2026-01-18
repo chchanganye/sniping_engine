@@ -285,6 +285,12 @@ export async function beCaptchaPoolFill(count: number): Promise<{ added: number;
   return resp.data.data
 }
 
+export async function beCaptchaPoolFillHuman(): Promise<{ added: number }> {
+  // 人工补充需要用户完成滑块，等待时间更长。
+  const resp = await http.post<DataEnvelope<{ added: number }>>('/api/v1/captcha/pool/fill-human', {}, { timeout: 600000 })
+  return resp.data.data
+}
+
 export async function beCaptchaPagesStatus(): Promise<CaptchaPagesStatus> {
   const resp = await http.get<DataEnvelope<CaptchaPagesStatus>>('/api/v1/captcha/pages')
   return resp.data.data
