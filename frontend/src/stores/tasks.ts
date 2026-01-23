@@ -265,7 +265,10 @@ export const useTasksStore = defineStore('tasks', {
     async probeCaptchaFlags(force = false) {
       if (this.captchaLoading) return
 
-      const pending = (force ? this.tasks : this.tasks.filter((t) => typeof t.needCaptcha !== 'boolean')).map((t) => t.id)
+      const now = Date.now()
+      const pending = (force ? this.tasks : this.tasks.filter((t) => typeof t.needCaptcha !== 'boolean'))
+        .filter((t) => !(t.mode === 'rush' && typeof t.rushAtMs === 'number' && t.rushAtMs > now))
+        .map((t) => t.id)
       if (pending.length === 0) return
 
       this.captchaLoading = true

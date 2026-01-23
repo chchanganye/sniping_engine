@@ -155,11 +155,13 @@ export interface Task {
 }
 
 export type LogLevel = 'info' | 'success' | 'warning' | 'error'
+export type LogCategory = 'system' | 'rush' | 'network' | 'other'
 
 export interface LogEntry {
   id: string
   at: string
   level: LogLevel
+  category?: LogCategory
   accountId?: string
   taskId?: string
   message: string

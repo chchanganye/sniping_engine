@@ -182,6 +182,10 @@ function statusMeta(row: Task) {
       return { type: 'info' as const, text: engineRunning.value ? '执行中' : '未运行' }
   }
 }
+
+function isRushNotReady(row: Task) {
+  return row.mode === 'rush' && typeof row.rushAtMs === 'number' && row.rushAtMs > Date.now()
+}
 </script>
 
 <template>
@@ -324,7 +328,8 @@ function statusMeta(row: Task) {
 
         <el-table-column label="是否需要验证码" width="140">
           <template #default="{ row }">
-            <el-tag v-if="row.needCaptcha === true" type="warning" size="small" effect="light">需要验证码</el-tag>
+            <el-tag v-if="isRushNotReady(row)" type="info" size="small" effect="light">未到抢购时间</el-tag>
+            <el-tag v-else-if="row.needCaptcha === true" type="warning" size="small" effect="light">需要验证码</el-tag>
             <el-tag v-else-if="row.needCaptcha === false" type="success" size="small" effect="light">无需验证码</el-tag>
             <el-tag v-else type="info" size="small" effect="light">未知</el-tag>
           </template>

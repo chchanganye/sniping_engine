@@ -78,7 +78,7 @@ func (n *EmailNotifier) NotifyOrderCreated(_ context.Context, evt OrderCreatedEv
 	case n.queue <- evt:
 	default:
 		if n.bus != nil {
-			n.bus.Log("warn", "邮件通知丢弃：队列已满", map[string]any{
+			n.bus.Log("warn", "email notify dropped (queue full)", map[string]any{
 				"targetId":  evt.TargetID,
 				"accountId": evt.AccountID,
 				"orderId":   evt.OrderID,
@@ -169,13 +169,13 @@ func (n *EmailNotifier) handleBatch(reason string, events []OrderCreatedEvent) {
 	settings, ok, err := n.store.GetEmailSettings(n.ctx)
 	if err != nil {
 		if n.bus != nil {
-			n.bus.Log("warn", "读取邮件配置失败", map[string]any{"error": err.Error()})
+			n.bus.Log("warn", "load email settings failed", map[string]any{"error": err.Error()})
 		}
 		return
 	}
 	if !ok || !settings.Enabled {
 		if n.bus != nil {
-			n.bus.Log("info", "邮件通知未启用", map[string]any{
+			n.bus.Log("info", "email notify disabled", map[string]any{
 				"count":  len(events),
 				"reason": reason,
 			})
@@ -185,14 +185,14 @@ func (n *EmailNotifier) handleBatch(reason string, events []OrderCreatedEvent) {
 
 	if err := validateEmailSettings(settings); err != nil {
 		if n.bus != nil {
-			n.bus.Log("warn", "邮件配置无效", map[string]any{"error": err.Error()})
+			n.bus.Log("warn", "email settings invalid", map[string]any{"error": err.Error()})
 		}
 		return
 	}
 
 	if err := SendOrderSummaryEmail(n.ctx, settings, events); err != nil {
 		if n.bus != nil {
-			n.bus.Log("warn", "邮件发送失败", map[string]any{
+			n.bus.Log("warn", "email send failed", map[string]any{
 				"error":  err.Error(),
 				"count":  len(events),
 				"reason": reason,
@@ -201,12 +201,12 @@ func (n *EmailNotifier) handleBatch(reason string, events []OrderCreatedEvent) {
 		return
 	}
 
-	if n.bus != nil {
-		n.bus.Log("info", "通知邮件已发送", map[string]any{
-			"count":  len(events),
-			"reason": reason,
-			"to":     strings.TrimSpace(settings.Email),
-		})
+		if n.bus != nil {
+			n.bus.Log("info", "email sent", map[string]any{
+				"count":  len(events),
+				"reason": reason,
+				"to":     strings.TrimSpace(settings.Email),
+			})
 	}
 }
 
@@ -598,11 +598,11 @@ func modeLabel(mode string) string {
 func emailSummaryWindow() time.Duration {
 	v := strings.TrimSpace(os.Getenv("SNIPING_ENGINE_EMAIL_SUMMARY_SECONDS"))
 	if v == "" {
-		return 20 * time.Second
+		return 60 * time.Second
 	}
 	n, err := strconv.Atoi(v)
 	if err != nil {
-		return 20 * time.Second
+		return 60 * time.Second
 	}
 	if n <= 0 {
 		return 0

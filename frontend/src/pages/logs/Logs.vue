@@ -7,6 +7,7 @@ import LogLevelTag from '@/components/LogLevelTag.vue'
 import { useAccountsStore } from '@/stores/accounts'
 import { useLogsStore } from '@/stores/logs'
 import { useTasksStore } from '@/stores/tasks'
+import type { LogCategory } from '@/types/core'
 
 const accountsStore = useAccountsStore()
 const tasksStore = useTasksStore()
@@ -26,6 +27,7 @@ const filters = reactive({
   accountId: '',
   taskId: '',
   level: '' as '' | 'info' | 'success' | 'warning' | 'error',
+  category: '' as '' | LogCategory,
   keyword: '',
 })
 
@@ -35,6 +37,7 @@ const filteredLogs = computed(() => {
     if (filters.accountId && l.accountId !== filters.accountId) return false
     if (filters.taskId && l.taskId !== filters.taskId) return false
     if (filters.level && l.level !== filters.level) return false
+    if (filters.category && l.category !== filters.category) return false
     if (kw && !l.message.toLowerCase().includes(kw)) return false
     return true
   })
@@ -43,6 +46,19 @@ const filteredLogs = computed(() => {
 function formatTime(value?: string) {
   if (!value) return '-'
   return dayjs(value).format('YYYY-MM-DD HH:mm:ss')
+}
+
+function categoryMeta(category?: LogCategory) {
+  switch (category) {
+    case 'system':
+      return { type: 'info' as const, text: '系统' }
+    case 'rush':
+      return { type: 'warning' as const, text: '抢购' }
+    case 'network':
+      return { type: 'success' as const, text: '网络' }
+    default:
+      return { type: 'info' as const, text: '其他' }
+  }
 }
 
 function clearLogs() {
@@ -65,7 +81,7 @@ function clearLogs() {
             <el-option v-for="t in tasks" :key="t.id" :label="t.goodsTitle" :value="t.id" />
           </el-select>
         </el-col>
-        <el-col :xs="24" :sm="8" :md="5">
+        <el-col :xs="24" :sm="8" :md="4">
           <el-select v-model="filters.level" placeholder="按级别筛选" clearable style="width: 100%">
             <el-option label="信息" value="info" />
             <el-option label="成功" value="success" />
@@ -73,7 +89,15 @@ function clearLogs() {
             <el-option label="错误" value="error" />
           </el-select>
         </el-col>
-        <el-col :xs="24" :sm="12" :md="7">
+        <el-col :xs="24" :sm="8" :md="4">
+          <el-select v-model="filters.category" placeholder="按分类筛选" clearable style="width: 100%">
+            <el-option label="系统" value="system" />
+            <el-option label="抢购" value="rush" />
+            <el-option label="网络" value="network" />
+            <el-option label="其他" value="other" />
+          </el-select>
+        </el-col>
+        <el-col :xs="24" :sm="12" :md="4">
           <el-input v-model="filters.keyword" placeholder="关键词搜索（message）" clearable />
         </el-col>
       </el-row>
@@ -93,6 +117,13 @@ function clearLogs() {
         <el-table-column label="级别" width="70">
           <template #default="{ row }">
             <LogLevelTag :level="row.level" />
+          </template>
+        </el-table-column>
+        <el-table-column label="分类" width="90">
+          <template #default="{ row }">
+            <el-tag :type="categoryMeta(row.category).type" size="small" effect="light">
+              {{ categoryMeta(row.category).text }}
+            </el-tag>
           </template>
         </el-table-column>
         <el-table-column label="时间" width="170">

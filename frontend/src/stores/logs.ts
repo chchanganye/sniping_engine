@@ -1,5 +1,5 @@
 import { defineStore } from 'pinia'
-import type { LogEntry, LogLevel } from '@/types/core'
+import type { LogCategory, LogEntry, LogLevel } from '@/types/core'
 import { uid } from '@/utils/id'
 import { useTasksStore } from '@/stores/tasks'
 import { useProgressStore, type ProgressEventPayload } from '@/stores/progress'
@@ -16,6 +16,32 @@ function mapLevel(level: string): LogLevel {
   if (v === 'warn' || v === 'warning') return 'warning'
   if (v === 'success') return 'success'
   return 'info'
+}
+
+function detectLogCategory(msg: string, fields?: Record<string, any>): LogCategory {
+  const m = (msg || '').toLowerCase()
+  const api = typeof fields?.api === 'string' ? fields.api.trim().toLowerCase() : ''
+  const url = typeof fields?.url === 'string' ? fields.url.trim().toLowerCase() : ''
+
+  if (
+    api ||
+    url ||
+    m.includes('http request') ||
+    m.includes('proxy request') ||
+    m.includes('upstream request') ||
+    m.includes('上游请求失败') ||
+    m.includes('发送网络请求') ||
+    m.includes('代理请求')
+  ) {
+    return 'network'
+  }
+  if (fields?.targetId || fields?.accountId) {
+    return 'rush'
+  }
+  if (m.includes('engine') || m.includes('server') || m.includes('captcha engine') || m.includes('settings')) {
+    return 'system'
+  }
+  return 'other'
 }
 
 function buildWsURL(path: string): string {
@@ -160,7 +186,7 @@ function friendlyLogMessage(msg: string, fields?: Record<string, any>) {
     const summary = count ? `（汇总${count}条）` : ''
     return `邮件发送失败${summary}：${normalizeErrorText(String(fields?.error ?? '')) || '未知错误'}${formatIds(fields)}`
   }
-  if (m === '邮件通知未启用') {
+  if (m === 'email notify disabled' || m === '邮件通知未启用') {
     const count = fields?.count != null ? String(fields.count) : ''
     return count ? `邮件通知未启用（已忽略${count}条结果）` : '邮件通知未启用'
   }
@@ -192,6 +218,7 @@ export const useLogsStore = defineStore('logs', {
         id: uid('log'),
         at: payload.at ?? new Date().toISOString(),
         level: payload.level,
+        category: payload.category,
         accountId: payload.accountId,
         taskId: payload.taskId,
         message: payload.message,
@@ -243,11 +270,14 @@ export const useLogsStore = defineStore('logs', {
           if (msg.type === 'log') {
             const at = typeof msg.time === 'number' ? new Date(msg.time).toISOString() : new Date().toISOString()
             const fields = msg.data?.fields as Record<string, any> | undefined
-            const text = friendlyLogMessage(String(msg.data?.msg ?? ''), fields) || '（空日志）'
+            const rawMsg = String(msg.data?.msg ?? '')
+            const category = detectLogCategory(rawMsg, fields)
+            const text = friendlyLogMessage(rawMsg, fields) || '（空日志）'
 
             this.addLog({
               at,
               level: mapLevel(String(msg.data?.level ?? 'info')),
+              category,
               accountId: typeof fields?.accountId === 'string' ? fields.accountId : undefined,
               taskId: typeof fields?.targetId === 'string' ? fields.targetId : undefined,
               message: text || '(empty log)',
