@@ -28,7 +28,6 @@ export interface BackendTarget {
   targetQty: number
   perOrderQty: number
   rushAtMs?: number
-  rushLeadMs?: number
   enabled: boolean
   createdAt?: string
   updatedAt?: string

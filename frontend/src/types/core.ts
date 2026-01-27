@@ -142,7 +142,6 @@ export interface Task {
   targetQty: number
   perOrderQty: number
   rushAtMs?: number
-  rushLeadMs?: number
   enabled: boolean
   status: TaskStatus
   purchasedQty: number

@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed, onMounted, reactive, ref } from 'vue'
+import { computed, onMounted, onUnmounted, reactive, ref } from 'vue'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import { storeToRefs } from 'pinia'
 import { Delete, Lightning, Refresh } from '@element-plus/icons-vue'
@@ -18,10 +18,21 @@ const { accounts } = storeToRefs(accountsStore)
 const { tasks, engineRunning, engineLoading, loading, captchaLoading } = storeToRefs(tasksStore)
 
 const settingNoon = ref(false)
+const nowMs = ref(Date.now())
+let countdownTimer: number | undefined
 
 onMounted(() => {
   void accountsStore.ensureLoaded()
   void refreshAll(false)
+  countdownTimer = window.setInterval(() => {
+    nowMs.value = Date.now()
+  }, 33)
+})
+
+onUnmounted(() => {
+  if (countdownTimer != null) {
+    window.clearInterval(countdownTimer)
+  }
 })
 
 const modeOptions: Array<{ label: string; value: TaskMode }> = [
@@ -30,6 +41,21 @@ const modeOptions: Array<{ label: string; value: TaskMode }> = [
 ]
 
 const enabledCount = computed(() => tasks.value.filter((t) => t.enabled).length)
+const nextRushAtMs = computed(() => {
+  const now = nowMs.value
+  let next = 0
+  for (const t of tasks.value) {
+    if (!t.enabled || t.mode !== 'rush' || typeof t.rushAtMs !== 'number') continue
+    if (t.rushAtMs <= now) continue
+    if (next === 0 || t.rushAtMs < next) next = t.rushAtMs
+  }
+  return next
+})
+const countdownLabel = computed(() => {
+  if (!nextRushAtMs.value) return '--'
+  const remain = Math.max(nextRushAtMs.value - nowMs.value, 0)
+  return formatCountdown(remain)
+})
 
 const testing = reactive<Record<string, boolean>>({})
 
@@ -159,12 +185,6 @@ function onRushAtChange(row: Task, value: Date | null) {
   void tasksStore.updateTask(row.id, { rushAtMs: ms })
 }
 
-function onRushLeadChange(row: Task, value: number | null | undefined) {
-  const v = typeof value === 'number' && Number.isFinite(value) ? value : 500
-  row.rushLeadMs = v
-  void tasksStore.updateTask(row.id, { rushLeadMs: v })
-}
-
 function statusMeta(row: Task) {
   if (!row.enabled) return { type: 'info' as const, text: '未监控' }
   switch (row.status) {
@@ -186,6 +206,17 @@ function statusMeta(row: Task) {
 function isRushNotReady(row: Task) {
   return row.mode === 'rush' && typeof row.rushAtMs === 'number' && row.rushAtMs > Date.now()
 }
+
+function formatCountdown(ms: number) {
+  const clamped = Math.max(0, Math.floor(ms))
+  const hours = Math.floor(clamped / 3600000)
+  const minutes = Math.floor((clamped % 3600000) / 60000)
+  const seconds = Math.floor((clamped % 60000) / 1000)
+  const milli = clamped % 1000
+  const pad2 = (v: number) => String(v).padStart(2, '0')
+  const pad3 = (v: number) => String(v).padStart(3, '0')
+  return `${pad2(hours)}:${pad2(minutes)}:${pad2(seconds)}.${pad3(milli)}`
+}
 </script>
 
 <template>
@@ -193,7 +224,8 @@ function isRushNotReady(row: Task) {
     <el-card shadow="never" header="抢购工作台">
       <div class="toolbar">
         <div style="color: #606266">
-          当前目标任务：<b>{{ tasks.length }}</b>，启用：<b>{{ enabledCount }}</b>，引擎状态：
+          当前目标任务：<b>{{ tasks.length }}</b>，启用：<b>{{ enabledCount }}</b>，
+          <span style="margin: 0 6px">抢购倒计时：<b>{{ countdownLabel }}</b></span>，引擎状态：
           <el-tag :type="engineRunning ? 'success' : 'info'" size="small" effect="light">
             {{ engineRunning ? '运行中' : '未运行' }}
           </el-tag>
@@ -253,23 +285,6 @@ function isRushNotReady(row: Task) {
               style="width: 100%"
               :disabled="engineRunning"
               @update:model-value="(v: Date | null) => onRushAtChange(row, v)"
-            />
-            <span v-else style="color: #c0c4cc">-</span>
-          </template>
-        </el-table-column>
-
-        <el-table-column label="提前轮询(ms)" width="150">
-          <template #default="{ row }">
-            <el-input-number
-              v-if="row.mode === 'rush'"
-              :model-value="row.rushLeadMs ?? 500"
-              :min="0"
-              :max="3600000"
-              size="small"
-              controls-position="right"
-              style="width: 100%"
-              :disabled="engineRunning"
-              @update:model-value="(v: number | null) => onRushLeadChange(row, v)"
             />
             <span v-else style="color: #c0c4cc">-</span>
           </template>

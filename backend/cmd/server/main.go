@@ -134,6 +134,23 @@ func main() {
 		serverErr <- server.Serve(ln)
 	}()
 
+	autoCtx, autoCancel := context.WithCancel(context.Background())
+	defer autoCancel()
+	go func() {
+		ticker := time.NewTicker(3 * time.Second)
+		defer ticker.Stop()
+		for {
+			if err := eng.AutoRunByStore(autoCtx); err != nil {
+				bus.Log("warn", "engine auto sync failed", map[string]any{"error": err.Error()})
+			}
+			select {
+			case <-autoCtx.Done():
+				return
+			case <-ticker.C:
+			}
+		}
+	}()
+
 	stop := make(chan os.Signal, 1)
 	signal.Notify(stop, os.Interrupt, syscall.SIGTERM)
 
