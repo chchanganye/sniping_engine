@@ -401,10 +401,6 @@ func (e *Engine) attemptOnce(ctx context.Context, target model.Target) {
 	}
 	defer e.releaseInFlight()
 
-	if strings.TrimSpace(acc.Token) == "" {
-		return
-	}
-
 	if !e.waitLimits(ctx, acc.ID) {
 		return
 	}
@@ -671,10 +667,6 @@ func (e *Engine) attemptWithAccount(ctx context.Context, target model.Target, ac
 	st.LastAttemptMs = time.Now().UnixMilli()
 	e.publishStateLocked(*st)
 	e.mu.Unlock()
-
-	if strings.TrimSpace(acc.Token) == "" {
-		return false
-	}
 
 	nowMs := time.Now().UnixMilli()
 	pre, ok := e.getCachedPreflight(acc.ID, target.ID, nowMs)
