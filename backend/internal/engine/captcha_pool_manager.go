@@ -181,18 +181,28 @@ func (e *Engine) fillCaptchaPool(ctx context.Context, count int, manual bool) (a
 	if count > 50 {
 		count = 50
 	}
+	maxConcurrent := utils.GetCaptchaMaxConcurrent()
+	if maxConcurrent <= 0 {
+		maxConcurrent = 1
+	}
+	if !manual {
+		spare := maxConcurrent - 1
+		if spare <= 0 {
+			return 0, count, nil
+		}
+		if count > spare {
+			count = spare
+		}
+	}
+	if count <= 0 {
+		return 0, 0, nil
+	}
 
 	if _, err := utils.EnsureCaptchaEngineReady(ctx, 0); err != nil {
 		return 0, 0, err
 	}
 
-	desiredPages := utils.GetCaptchaMaxConcurrent()
-	if desiredPages <= 0 {
-		desiredPages = 1
-	}
-	if desiredPages > count {
-		desiredPages = count
-	}
+	desiredPages := count
 	if err := utils.EnsureCaptchaPagePool(ctx, desiredPages); err != nil {
 		return 0, 0, err
 	}

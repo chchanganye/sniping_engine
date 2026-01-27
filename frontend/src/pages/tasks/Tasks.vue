@@ -82,6 +82,14 @@ async function enableAll() {
     return
   }
   await tasksStore.setAllEnabled(true)
+  if (!engineRunning.value) {
+    try {
+      await tasksStore.startEngine()
+    } catch (e) {
+      ElMessage.error(e instanceof Error ? e.message : '启动引擎失败')
+    }
+  }
+  void refreshAll(false)
   ElMessage.success('已开启全部任务')
 }
 
@@ -172,6 +180,13 @@ async function onEnabledChange(row: Task, value: boolean) {
   row.enabled = value
   try {
     await tasksStore.updateTask(row.id, { enabled: value })
+    if (value && !engineRunning.value) {
+      try {
+        await tasksStore.startEngine()
+      } catch (e) {
+        ElMessage.error(e instanceof Error ? e.message : '启动引擎失败')
+      }
+    }
     await refreshAll(false)
   } catch (e) {
     row.enabled = prev
