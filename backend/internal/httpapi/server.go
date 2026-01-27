@@ -408,11 +408,20 @@ func (s *Server) handleEngineStart(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
 		return
 	}
+	if s.bus != nil {
+		s.bus.Log("info", "收到启动引擎请求", nil)
+	}
 	ctx, cancel := context.WithTimeout(r.Context(), 10*time.Second)
 	defer cancel()
 	if err := s.engine.StartAll(ctx); err != nil {
+		if s.bus != nil {
+			s.bus.Log("warn", "启动引擎失败", map[string]any{"error": err.Error()})
+		}
 		writeJSON(w, http.StatusBadRequest, map[string]any{"error": err.Error()})
 		return
+	}
+	if s.bus != nil {
+		s.bus.Log("info", "启动引擎成功", nil)
 	}
 	writeJSON(w, http.StatusOK, map[string]any{"ok": true})
 }
@@ -422,11 +431,20 @@ func (s *Server) handleEngineStop(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
 		return
 	}
+	if s.bus != nil {
+		s.bus.Log("info", "收到停止引擎请求", nil)
+	}
 	ctx, cancel := context.WithTimeout(r.Context(), 10*time.Second)
 	defer cancel()
 	if err := s.engine.StopAll(ctx); err != nil {
+		if s.bus != nil {
+			s.bus.Log("warn", "停止引擎失败", map[string]any{"error": err.Error()})
+		}
 		writeJSON(w, http.StatusInternalServerError, map[string]any{"error": err.Error()})
 		return
+	}
+	if s.bus != nil {
+		s.bus.Log("info", "停止引擎成功", nil)
 	}
 	writeJSON(w, http.StatusOK, map[string]any{"ok": true})
 }

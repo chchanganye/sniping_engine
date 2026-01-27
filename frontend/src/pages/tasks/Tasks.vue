@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import { computed, onMounted, onUnmounted, reactive, ref } from 'vue'
-import { ElMessage, ElMessageBox } from 'element-plus'
+import { ElMessage, ElMessageBox, ElNotification } from 'element-plus'
 import { storeToRefs } from 'pinia'
 import { Delete, Lightning, Refresh } from '@element-plus/icons-vue'
 import dayjs from 'dayjs'
@@ -85,7 +85,21 @@ async function enableAll() {
   if (!engineRunning.value) {
     try {
       await tasksStore.startEngine()
+      ElNotification({
+        title: '抢购服务',
+        message: '已启动抢购服务',
+        type: 'success',
+        position: 'bottom-right',
+        duration: 3000,
+      })
     } catch (e) {
+      ElNotification({
+        title: '抢购服务',
+        message: e instanceof Error ? e.message : '启动引擎失败',
+        type: 'error',
+        position: 'bottom-right',
+        duration: 4000,
+      })
       ElMessage.error(e instanceof Error ? e.message : '启动引擎失败')
     }
   }
@@ -183,7 +197,21 @@ async function onEnabledChange(row: Task, value: boolean) {
     if (value && !engineRunning.value) {
       try {
         await tasksStore.startEngine()
+        ElNotification({
+          title: '抢购服务',
+          message: '已启动抢购服务',
+          type: 'success',
+          position: 'bottom-right',
+          duration: 3000,
+        })
       } catch (e) {
+        ElNotification({
+          title: '抢购服务',
+          message: e instanceof Error ? e.message : '启动引擎失败',
+          type: 'error',
+          position: 'bottom-right',
+          duration: 4000,
+        })
         ElMessage.error(e instanceof Error ? e.message : '启动引擎失败')
       }
     }
