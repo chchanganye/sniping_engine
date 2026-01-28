@@ -135,6 +135,7 @@ export interface NotifySettings {
   rushExpireDisableMinutes: number
   rushMode?: 'concurrent' | 'round_robin'
   roundRobinIntervalMs?: number
+  scanIntervalMs?: number
 }
 
 export interface CaptchaPoolItemView {

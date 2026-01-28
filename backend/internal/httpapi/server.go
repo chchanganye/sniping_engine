@@ -599,6 +599,7 @@ type notifySettingsPayload struct {
 	RushExpireDisableMinutes *int    `json:"rushExpireDisableMinutes,omitempty"`
 	RushMode                 *string `json:"rushMode,omitempty"`
 	RoundRobinIntervalMs     *int    `json:"roundRobinIntervalMs,omitempty"`
+	ScanIntervalMs           *int    `json:"scanIntervalMs,omitempty"`
 }
 
 func (s *Server) handleNotifySettings(w http.ResponseWriter, r *http.Request) {
@@ -639,6 +640,9 @@ func (s *Server) handleNotifySettings(w http.ResponseWriter, r *http.Request) {
 		}
 		if body.RoundRobinIntervalMs != nil {
 			next.RoundRobinIntervalMs = *body.RoundRobinIntervalMs
+		}
+		if body.ScanIntervalMs != nil {
+			next.ScanIntervalMs = *body.ScanIntervalMs
 		}
 
 		next = engine.NormalizeNotifySettings(next)

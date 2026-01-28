@@ -53,6 +53,7 @@ const notify = reactive<NotifySettings>({
   rushExpireDisableMinutes: 10,
   rushMode: 'concurrent',
   roundRobinIntervalMs: 120,
+  scanIntervalMs: 1000,
 })
 
 function isValidEmailLike(value: string): boolean {
@@ -218,6 +219,7 @@ async function loadNotify() {
     notify.rushExpireDisableMinutes = Number(data.rushExpireDisableMinutes || 10)
     notify.rushMode = data.rushMode === 'round_robin' ? 'round_robin' : 'concurrent'
     notify.roundRobinIntervalMs = Number(data.roundRobinIntervalMs || 120)
+    notify.scanIntervalMs = Number(data.scanIntervalMs || 1000)
   } catch (e) {
     ElMessage.error(e instanceof Error ? e.message : '加载失败')
   } finally {
@@ -232,11 +234,13 @@ async function saveNotify() {
       rushExpireDisableMinutes: Math.max(1, Math.floor(Number(notify.rushExpireDisableMinutes || 10))),
       rushMode: notify.rushMode === 'round_robin' ? 'round_robin' : 'concurrent',
       roundRobinIntervalMs: Math.max(50, Math.floor(Number(notify.roundRobinIntervalMs || 120))),
+      scanIntervalMs: Math.max(100, Math.floor(Number(notify.scanIntervalMs || 1000))),
     }
     const saved = await beSaveNotifySettings(payload)
     notify.rushExpireDisableMinutes = Number(saved.rushExpireDisableMinutes || 10)
     notify.rushMode = saved.rushMode === 'round_robin' ? 'round_robin' : 'concurrent'
     notify.roundRobinIntervalMs = Number(saved.roundRobinIntervalMs || 120)
+    notify.scanIntervalMs = Number(saved.scanIntervalMs || 1000)
     ElMessage.success('已保存')
   } catch (e) {
     ElMessage.error(e instanceof Error ? e.message : '保存失败')
@@ -346,6 +350,10 @@ onMounted(() => {
         <el-form-item v-if="notify.rushMode === 'round_robin'" label="轮询间隔(ms)">
           <el-input-number v-model="notify.roundRobinIntervalMs" :min="50" :max="2000" :step="10" />
           <div style="margin-left: 10px; color: #909399">建议 80~300，值越小轮询越快。</div>
+        </el-form-item>
+        <el-form-item label="扫货间隔(ms)">
+          <el-input-number v-model="notify.scanIntervalMs" :min="100" :max="60000" :step="50" />
+          <div style="margin-left: 10px; color: #909399">建议 300~2000，值越小请求越频繁。</div>
         </el-form-item>
         <el-form-item label="抢购过时关闭（分钟）">
           <el-input-number v-model="notify.rushExpireDisableMinutes" :min="1" :max="1440" :step="1" />

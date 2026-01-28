@@ -313,6 +313,8 @@ func (e *Engine) runTarget(ctx context.Context, target model.Target) {
 		if e.RushMode() == "round_robin" {
 			interval = e.RoundRobinInterval()
 		}
+	} else if target.Mode == model.TargetModeScan {
+		interval = e.ScanInterval()
 	}
 
 	e.launchAttempts(ctx, target)
@@ -500,6 +502,9 @@ func (e *Engine) attemptOnce(ctx context.Context, target model.Target) {
 func (e *Engine) launchAttempts(ctx context.Context, target model.Target) {
 	max := int(e.maxPerTargetInFlight.Load())
 	if max <= 0 {
+		max = 1
+	}
+	if target.Mode == model.TargetModeScan {
 		max = 1
 	}
 	if target.Mode == model.TargetModeRush && e.RushMode() == "round_robin" {
@@ -731,6 +736,16 @@ func (e *Engine) attemptWithAccount(ctx context.Context, target model.Target, ac
 				"accountId": acc.ID,
 				"traceId":   pre.TraceID,
 			})
+		}
+		if target.Mode == model.TargetModeRush {
+			if e.bus != nil {
+				e.bus.Log("warn", "当前不可购买，已自动关闭", map[string]any{
+					"targetId":  target.ID,
+					"accountId": acc.ID,
+					"traceId":   pre.TraceID,
+				})
+			}
+			e.disableTargetAsync(target.ID, "当前不可购买", nil)
 		}
 		return false
 	}

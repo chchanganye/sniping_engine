@@ -12,6 +12,7 @@ func DefaultNotifySettings() model.NotifySettings {
 		RushExpireDisableMinutes: 10,
 		RushMode:                 "concurrent",
 		RoundRobinIntervalMs:     120,
+		ScanIntervalMs:           1000,
 	}
 }
 
@@ -37,6 +38,15 @@ func normalizeNotifySettings(in model.NotifySettings) model.NotifySettings {
 	}
 	if out.RoundRobinIntervalMs > 2000 {
 		out.RoundRobinIntervalMs = 2000
+	}
+	if out.ScanIntervalMs <= 0 {
+		out.ScanIntervalMs = 1000
+	}
+	if out.ScanIntervalMs < 100 {
+		out.ScanIntervalMs = 100
+	}
+	if out.ScanIntervalMs > 60000 {
+		out.ScanIntervalMs = 60000
 	}
 	return out
 }
@@ -79,4 +89,15 @@ func (e *Engine) RoundRobinInterval() time.Duration {
 		return 120 * time.Millisecond
 	}
 	return time.Duration(st.RoundRobinIntervalMs) * time.Millisecond
+}
+
+func (e *Engine) ScanInterval() time.Duration {
+	if e == nil {
+		return 1 * time.Second
+	}
+	st := e.NotifySettings()
+	if st.ScanIntervalMs <= 0 {
+		return e.task.ScanInterval()
+	}
+	return time.Duration(st.ScanIntervalMs) * time.Millisecond
 }

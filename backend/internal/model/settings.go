@@ -27,4 +27,6 @@ type NotifySettings struct {
 	RushMode string `json:"rushMode"`
 	// RoundRobinIntervalMs 轮询抢购间隔（毫秒）。
 	RoundRobinIntervalMs int `json:"roundRobinIntervalMs"`
+	// ScanIntervalMs 扫货间隔（毫秒）。
+	ScanIntervalMs int `json:"scanIntervalMs"`
 }
