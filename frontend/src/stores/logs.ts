@@ -8,6 +8,7 @@ type BusMessage =
   | { type: 'log'; time: number; data: { level: string; msg: string; fields?: Record<string, any> } }
   | { type: 'progress'; time: number; data: ProgressEventPayload }
   | { type: 'task_state'; time: number; data: any }
+  | { type: 'target_disabled'; time: number; data: { targetId?: string; reason?: string } }
   | { type: string; time: number; data: any }
 
 function mapLevel(level: string): LogLevel {
@@ -258,6 +259,10 @@ export const useLogsStore = defineStore('logs', {
 
           if (msg.type === 'task_state') {
             tasksStore.applyTaskState(msg.data)
+            return
+          }
+          if (msg.type === 'target_disabled') {
+            tasksStore.applyTargetDisabled(msg.data)
             return
           }
 

@@ -273,7 +273,6 @@ func (e *Engine) State() model.EngineState {
 }
 
 func (e *Engine) runTarget(ctx context.Context, target model.Target) {
-	defer e.wg.Done()
 	defer func() {
 		e.mu.Lock()
 		st := e.states[target.ID]

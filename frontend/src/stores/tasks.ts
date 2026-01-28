@@ -219,6 +219,35 @@ export const useTasksStore = defineStore('tasks', {
         this.engineLoading = false
       }
     },
+    applyTargetDisabled(payload: { targetId?: string; reason?: string }) {
+      const targetId = typeof payload?.targetId === 'string' ? payload.targetId : ''
+      if (!targetId) return
+      const idx = this.tasks.findIndex((t) => t.id === targetId)
+      if (idx < 0) return
+      const current = this.tasks[idx]!
+      const next: Task = {
+        ...current,
+        enabled: false,
+        lastError: payload?.reason ? String(payload.reason) : current.lastError,
+      }
+      next.status = normalizeTaskStatus(
+        {
+          id: next.id,
+          name: next.goodsTitle,
+          itemId: next.itemId,
+          skuId: next.skuId,
+          shopId: next.shopId,
+          mode: next.mode,
+          targetQty: next.targetQty,
+          perOrderQty: next.perOrderQty,
+          rushAtMs: next.rushAtMs,
+          enabled: next.enabled,
+        },
+        undefined,
+        Boolean(this.engine?.running),
+      )
+      this.tasks.splice(idx, 1, next)
+    },
     applyTaskState(state: EngineTaskState) {
       const idx = this.tasks.findIndex((t) => t.id === state.targetId)
       if (idx < 0) return

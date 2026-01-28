@@ -47,6 +47,7 @@ func (e *Engine) disableTarget(targetID string, reason string, fields map[string
 			out[k] = v
 		}
 		e.bus.Log("info", "任务已自动关闭", out)
+		e.bus.Publish("target_disabled", out)
 	}
 
 	if e.store != nil {
@@ -100,4 +101,3 @@ func (e *Engine) disableTarget(targetID string, reason string, fields map[string
 		}()
 	}
 }
-
