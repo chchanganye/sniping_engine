@@ -1,5 +1,6 @@
 import { defineStore } from 'pinia'
 import type { GoodsItem, Task, TaskMode, TaskStatus } from '@/types/core'
+import { ElNotification } from 'element-plus'
 import {
   beDeleteTarget,
   beEngineStart,
@@ -64,6 +65,8 @@ function mapTargetToTask(target: BackendTarget, engine: EngineState | null): Tas
     updatedAt: target.updatedAt,
   }
 }
+
+const lastErrorNotice = new Map<string, string>()
 
 function extractTargetFromGoods(goods: GoodsItem): Pick<BackendTarget, 'itemId' | 'skuId' | 'shopId' | 'name'> | null {
   const sku = goods.raw as any
@@ -225,10 +228,18 @@ export const useTasksStore = defineStore('tasks', {
       const idx = this.tasks.findIndex((t) => t.id === targetId)
       if (idx < 0) return
       const current = this.tasks[idx]!
+      const reason = typeof payload?.reason === 'string' ? payload.reason.trim() : ''
+      ElNotification({
+        title: '任务已自动关闭',
+        message: reason ? `${current.goodsTitle}：${reason}` : current.goodsTitle,
+        type: 'warning',
+        position: 'bottom-right',
+        duration: 4000,
+      })
       const next: Task = {
         ...current,
         enabled: false,
-        lastError: payload?.reason ? String(payload.reason) : current.lastError,
+        lastError: reason ? reason : current.lastError,
       }
       next.status = normalizeTaskStatus(
         {
@@ -252,6 +263,22 @@ export const useTasksStore = defineStore('tasks', {
       const idx = this.tasks.findIndex((t) => t.id === state.targetId)
       if (idx < 0) return
       const current = this.tasks[idx]!
+      const errorText = typeof state.lastError === 'string' ? state.lastError.trim() : ''
+      if (errorText) {
+        const prevError = lastErrorNotice.get(current.id)
+        if (prevError !== errorText) {
+          lastErrorNotice.set(current.id, errorText)
+          ElNotification({
+            title: '抢购失败',
+            message: `${current.goodsTitle}：${errorText}`,
+            type: 'error',
+            position: 'bottom-right',
+            duration: 4000,
+          })
+        }
+      } else {
+        lastErrorNotice.delete(current.id)
+      }
       const next: Task = {
         ...current,
         purchasedQty: typeof state.purchasedQty === 'number' ? state.purchasedQty : current.purchasedQty,
