@@ -40,8 +40,8 @@ type Engine struct {
 
 	notifySettings atomic.Value // model.NotifySettings
 
-	captchaPoolActivateAtMs atomic.Int64
-	captchaPoolActivated    atomic.Bool
+	captchaPoolActivateAtMs      atomic.Int64
+	captchaPoolActivated         atomic.Bool
 	captchaPoolMaintainerRunning atomic.Bool
 
 	mu      sync.Mutex
@@ -51,8 +51,8 @@ type Engine struct {
 	wg      sync.WaitGroup
 	states  map[string]*model.TaskState
 
-	accounts []model.Account
-	targets  []model.Target
+	accounts        []model.Account
+	targets         []model.Target
 	targetCancels   map[string]context.CancelFunc
 	targetSnapshots map[string]model.Target
 
@@ -120,21 +120,21 @@ func New(opts Options) *Engine {
 	}
 
 	e := &Engine{
-		store:         opts.Store,
-		provider:      opts.Provider,
-		bus:           opts.Bus,
-		notifier:      opts.Notifier,
-		limits:        opts.Limits,
-		task:          opts.Task,
-		captchaPool:   NewCaptchaPool(DefaultCaptchaPoolSettings()),
-		states:        make(map[string]*model.TaskState),
-		targetCancels: make(map[string]context.CancelFunc),
-		targetSnapshots: make(map[string]model.Target),
-		perLimiter:    make(map[string]*rate.Limiter),
-		inFlight:      make(chan struct{}, maxInFlight),
-		accountLocks:  make(map[string]chan struct{}),
-		reserved:      make(map[string]int),
-		globalLimiter: rate.NewLimiter(rate.Limit(globalQPS), globalBurst),
+		store:            opts.Store,
+		provider:         opts.Provider,
+		bus:              opts.Bus,
+		notifier:         opts.Notifier,
+		limits:           opts.Limits,
+		task:             opts.Task,
+		captchaPool:      NewCaptchaPool(DefaultCaptchaPoolSettings()),
+		states:           make(map[string]*model.TaskState),
+		targetCancels:    make(map[string]context.CancelFunc),
+		targetSnapshots:  make(map[string]model.Target),
+		perLimiter:       make(map[string]*rate.Limiter),
+		inFlight:         make(chan struct{}, maxInFlight),
+		accountLocks:     make(map[string]chan struct{}),
+		reserved:         make(map[string]int),
+		globalLimiter:    rate.NewLimiter(rate.Limit(globalQPS), globalBurst),
 		preflightCache:   make(map[string]preflightCacheEntry),
 		preflightBackoff: make(map[string]preflightBackoffState),
 	}
@@ -310,6 +310,9 @@ func (e *Engine) runTarget(ctx context.Context, target model.Target) {
 	interval := e.task.ScanInterval()
 	if target.Mode == model.TargetModeRush {
 		interval = e.task.RushInterval()
+		if e.RushMode() == "round_robin" {
+			interval = e.RoundRobinInterval()
+		}
 	}
 
 	e.launchAttempts(ctx, target)
@@ -497,6 +500,9 @@ func (e *Engine) attemptOnce(ctx context.Context, target model.Target) {
 func (e *Engine) launchAttempts(ctx context.Context, target model.Target) {
 	max := int(e.maxPerTargetInFlight.Load())
 	if max <= 0 {
+		max = 1
+	}
+	if target.Mode == model.TargetModeRush && e.RushMode() == "round_robin" {
 		max = 1
 	}
 
@@ -690,12 +696,12 @@ func (e *Engine) attemptWithAccount(ctx context.Context, target model.Target, ac
 			e.setError(target.ID, err)
 			if e.bus != nil {
 				e.bus.Log("warn", "预下单失败", map[string]any{
-					"targetId":   target.ID,
-					"accountId":  acc.ID,
-					"error":      err.Error(),
-					"backoffMs":  wait.Milliseconds(),
-					"failures":   failures,
-					"retryAtMs":  untilMs,
+					"targetId":  target.ID,
+					"accountId": acc.ID,
+					"error":     err.Error(),
+					"backoffMs": wait.Milliseconds(),
+					"failures":  failures,
+					"retryAtMs": untilMs,
 				})
 			}
 			return false

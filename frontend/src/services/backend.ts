@@ -133,6 +133,8 @@ export interface CaptchaPoolSettings {
 
 export interface NotifySettings {
   rushExpireDisableMinutes: number
+  rushMode?: 'concurrent' | 'round_robin'
+  roundRobinIntervalMs?: number
 }
 
 export interface CaptchaPoolItemView {

@@ -51,6 +51,8 @@ const captchaPool = reactive<CaptchaPoolSettings>({
 
 const notify = reactive<NotifySettings>({
   rushExpireDisableMinutes: 10,
+  rushMode: 'concurrent',
+  roundRobinIntervalMs: 120,
 })
 
 function isValidEmailLike(value: string): boolean {
@@ -214,6 +216,8 @@ async function loadNotify() {
   try {
     const data = await beGetNotifySettings()
     notify.rushExpireDisableMinutes = Number(data.rushExpireDisableMinutes || 10)
+    notify.rushMode = data.rushMode === 'round_robin' ? 'round_robin' : 'concurrent'
+    notify.roundRobinIntervalMs = Number(data.roundRobinIntervalMs || 120)
   } catch (e) {
     ElMessage.error(e instanceof Error ? e.message : '加载失败')
   } finally {
@@ -226,9 +230,13 @@ async function saveNotify() {
   try {
     const payload: Partial<NotifySettings> = {
       rushExpireDisableMinutes: Math.max(1, Math.floor(Number(notify.rushExpireDisableMinutes || 10))),
+      rushMode: notify.rushMode === 'round_robin' ? 'round_robin' : 'concurrent',
+      roundRobinIntervalMs: Math.max(50, Math.floor(Number(notify.roundRobinIntervalMs || 120))),
     }
     const saved = await beSaveNotifySettings(payload)
     notify.rushExpireDisableMinutes = Number(saved.rushExpireDisableMinutes || 10)
+    notify.rushMode = saved.rushMode === 'round_robin' ? 'round_robin' : 'concurrent'
+    notify.roundRobinIntervalMs = Number(saved.roundRobinIntervalMs || 120)
     ElMessage.success('已保存')
   } catch (e) {
     ElMessage.error(e instanceof Error ? e.message : '保存失败')
@@ -327,6 +335,18 @@ onMounted(() => {
 
     <el-card shadow="never" header="过时自动关闭" style="margin-top: 12px">
       <el-form v-loading="notifyLoading" :model="notify" label-width="160px" style="max-width: 720px">
+        <el-form-item label="抢购模式">
+          <el-select v-model="notify.rushMode" style="width: 220px">
+            <el-option label="并发模式" value="concurrent" />
+            <el-option label="轮询模式" value="round_robin" />
+          </el-select>
+          <div style="margin-left: 10px; color: #909399">并发模式使用并发账号数；轮询模式单账号轮询更稳定。</div>
+        </el-form-item>
+
+        <el-form-item v-if="notify.rushMode === 'round_robin'" label="轮询间隔(ms)">
+          <el-input-number v-model="notify.roundRobinIntervalMs" :min="50" :max="2000" :step="10" />
+          <div style="margin-left: 10px; color: #909399">建议 80~300，值越小轮询越快。</div>
+        </el-form-item>
         <el-form-item label="抢购过时关闭（分钟）">
           <el-input-number v-model="notify.rushExpireDisableMinutes" :min="1" :max="1440" :step="1" />
           <div style="margin-left: 10px; color: #909399">默认 10：超过抢购时间 N 分钟自动关闭该任务监控</div>

@@ -23,4 +23,8 @@ type CaptchaPoolSettings struct {
 type NotifySettings struct {
 	// RushExpireDisableMinutes 抢购时间(rushAtMs)过去多少分钟后自动关闭监控（enabled=false）。
 	RushExpireDisableMinutes int `json:"rushExpireDisableMinutes"`
+	// RushMode 抢购模式：concurrent(并发) 或 round_robin(轮询)。
+	RushMode string `json:"rushMode"`
+	// RoundRobinIntervalMs 轮询抢购间隔（毫秒）。
+	RoundRobinIntervalMs int `json:"roundRobinIntervalMs"`
 }

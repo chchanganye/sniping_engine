@@ -596,7 +596,9 @@ type emailTestPayload struct {
 }
 
 type notifySettingsPayload struct {
-	RushExpireDisableMinutes *int `json:"rushExpireDisableMinutes,omitempty"`
+	RushExpireDisableMinutes *int    `json:"rushExpireDisableMinutes,omitempty"`
+	RushMode                 *string `json:"rushMode,omitempty"`
+	RoundRobinIntervalMs     *int    `json:"roundRobinIntervalMs,omitempty"`
 }
 
 func (s *Server) handleNotifySettings(w http.ResponseWriter, r *http.Request) {
@@ -632,14 +634,14 @@ func (s *Server) handleNotifySettings(w http.ResponseWriter, r *http.Request) {
 		if body.RushExpireDisableMinutes != nil {
 			next.RushExpireDisableMinutes = *body.RushExpireDisableMinutes
 		}
+		if body.RushMode != nil {
+			next.RushMode = strings.TrimSpace(*body.RushMode)
+		}
+		if body.RoundRobinIntervalMs != nil {
+			next.RoundRobinIntervalMs = *body.RoundRobinIntervalMs
+		}
 
-		if next.RushExpireDisableMinutes <= 0 {
-			next.RushExpireDisableMinutes = 10
-		}
-		if next.RushExpireDisableMinutes > 1440 {
-			writeJSON(w, http.StatusBadRequest, map[string]any{"error": "rushExpireDisableMinutes is too large"})
-			return
-		}
+		next = engine.NormalizeNotifySettings(next)
 
 		saved, err := s.store.UpsertNotifySettings(r.Context(), next)
 		if err != nil {
